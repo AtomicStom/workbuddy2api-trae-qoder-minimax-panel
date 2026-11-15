@@ -14,7 +14,7 @@
 //
 //	cd D:/WorkBuddy/源码
 //	go run ./cmd/qoderprobe \
-//	  -emails "2108643821@qq.com,xu20060420fan@gmail.com" \
+//	  -emails "first@example.com,second@example.com" \
 //	  -variants baseline,derived,derived_proxy \
 //	  -out ../data/qoder_identity_probe.json
 package main

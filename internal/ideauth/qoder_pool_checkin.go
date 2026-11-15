@@ -1151,8 +1151,8 @@ func qoderSamePersonHolderOf(email string, out []QoderScanAccount) string {
 //
 // ⚠️ 重要更正（实测 2026-11-04 11:28，GET .../campaigns/{cid}/reward 原始响应）：
 //
-//	2108643821@qq.com       grantId=01a1a477-96d3-…  claimedAt=2026-11-04T02:51:03Z
-//	xu20060420fan@gmail.com grantId=01a1a463-e178-…  claimedAt=2026-11-04T02:29:31Z
+//	账号 45da34       grantId=01a1a477-96d3-…  claimedAt=2026-11-04T02:51:03Z
+//	账号 569875 grantId=01a1a463-e178-…  claimedAt=2026-11-04T02:29:31Z
 //
 // 两个号看到的是**同一条 campaign**（同一个活动"每天领 100 Credits"，服务端
 // 对所有人下发同一个活动实例），但**grantId 不同、claimedAt 不同** ——
