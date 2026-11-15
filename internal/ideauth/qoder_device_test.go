@@ -13,12 +13,14 @@ import (
 // 每设备每日限领一个账号是服务端硬规则，由扫描结果如实说明。
 //
 // ⚠️ 2026-11-14 更正：本测试原来断言「**所有账号**应使用同一真实设备指纹」
-// （da.MachineID == db.MachineID）。那条结论已经错了 —— 它正是「两个号设备一样」
-// 的历史来源。用户诉求：「设备是真实设备还是邮箱派生必须手动去调，应该自动
-// 生成，反正俩肯定应该不一样」。现在默认 device_mode=auto：
-// 号池第一个号 = real（真实设备，与客户端运行时一致），其余号 = derived
-// （按邮箱确定性派生，Derived=true、Synthetic=false，Token/Code 照真实发送 ——
-// 2026-10-24 那条「必须真实发送」的结论仍然成立）。
+// （da.MachineID == db.MachineID）。那条结论是 2026-10-24 的旧结论，后来因为
+// 「多号派生」被改掉，2026-11-15 又按实测改了回来 —— 两次修正都保留原文。
+//
+// ⚠️ 2026-11-15 终版（实测）：默认 device_mode=auto → 展开为 **real**（全部号）。
+// 依据：派生身份会被上游按设备维度过滤掉每日额度 —— 实测 gmail 号
+// （derived）pending 领不到，同一号改成 real 立刻 +100 Credits。
+// 所以「所有账号共用同一真实设备指纹」**重新成立**，而且不影响各号各领各的
+// （2026-11-14 实测：两个号都是 real，各领各的 100 积分）。
 func TestQoderDeviceRealFingerprint(t *testing.T) {
 	// 「真实指纹」来自本机装的 Qoder 客户端（runtime-info）。CI / 无客户端的机器上
 	// 取不到，这时断言真实指纹没有意义（会误报失败），直接跳过；
@@ -59,16 +61,13 @@ func TestQoderDeviceRealFingerprint(t *testing.T) {
 	if h.Get("Cosy-MachineId") == "" {
 		t.Error("Cosy-MachineId 不能为空")
 	}
-	// 第一个号用真实设备（Derived=false），第二个号用邮箱派生设备（Derived=true）。
-	if da.Derived {
-		t.Error("号池第一个号应使用真实设备（Derived=false）")
+	// 默认（auto → real）：两个号都用真实设备（Derived=false），
+	// 且共用同一真实设备指纹 —— 2026-10-24 的原结论，2026-11-15 实测恢复成立。
+	if da.Derived || db.Derived {
+		t.Error("默认（auto→real）下所有号都应使用真实设备（Derived=false）")
 	}
-	if !db.Derived {
-		t.Error("号池第二个号应使用邮箱派生设备（Derived=true）")
-	}
-	// 两个号的设备指纹必须不同（自动分配的核心保证）。
-	if da.MachineID == db.MachineID {
-		t.Errorf("两个号不应共用同一设备指纹: %s == %s", da.MachineID, db.MachineID)
+	if da.MachineID != db.MachineID {
+		t.Errorf("所有账号应使用同一真实设备指纹: %s != %s", da.MachineID, db.MachineID)
 	}
 	if !strings.HasPrefix(da.MachineID, "") && len(da.MachineID) == 0 {
 		t.Error("machineId 为空")

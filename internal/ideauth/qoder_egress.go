@@ -33,18 +33,21 @@ import (
 //	两个号肯定应该不一样」。手动配置在多号场景下既繁琐又容易配错
 //	（两个号都选 real = 同一台设备 = 上游按设备过滤时互相干扰）。
 //
-//	auto 的语义：**按号池顺序自动分配**
-//	  - 号池里**第一个**账号 → real（真实设备，与客户端运行时身份一致）；
-//	  - 其余账号 → derived（按邮箱确定性派生，跨进程稳定、彼此不同）。
+// auto 的语义（2026-11-15 实测修正）：
 //
-//	这样「同一个号在任何时候都是同一套设备身份」（不随号池增删漂移，
-//	因为顺序取自号池文件里的账号顺序），且**任意两个号必然不同**。
+//	⚠️ 旧语义是「号池第一个号 real、其余 derived（按邮箱派生）」—— 这条被实测
+//	推翻：派生身份会被上游按设备维度过滤掉每日额度，非首个号就领不到当天的
+//	100 积分（实测 gmail 号：derived → pending，改 real → 立刻 +100 Credits）。
 //
-//	用户显式写成 real / derived 的账号仍然尊重手动配置（手动优先于自动）。
+//	现在 auto 的展开是 **real**（本机真实设备身份）：能领到 > 身份不同。
+//	实测各号都用 real 时互不影响：2026-11-14 两个号都是 real，各领各的 100。
+//
+//	用户显式写成 real / derived 的账号仍然尊重手动配置（手动优先于自动）；
+//	derived 保留为「确实需要隔离设备指纹」时的高级选项，但要清楚它可能领不到额度。
 const (
 	QoderDeviceModeReal    = "real"
 	QoderDeviceModeDerived = "derived"
-	// QoderDeviceModeAuto 自动分配（real/derived 依号池顺序决定）。
+	// QoderDeviceModeAuto 自动分配（当前展开为 real）。
 	QoderDeviceModeAuto = "auto"
 )
 
@@ -284,11 +287,12 @@ func EnsureQoderEgress() (int, error) {
 			prof.DeviceMode = QoderDeviceModeAuto
 			acctChanged = true
 		} else if prof.DeviceMode == QoderDeviceModeReal && qoderEgressLooksUntouched(prof, email) {
-			// 存量迁移（2026-11-14）：老版本默认就是 real，所以号池里每个号都被
-			// 写成了 real —— 这正是「两个号设备一样」的历史来源。
+			// 存量迁移（2026-11-15）：老版本默认就是 real，号池里每个号都被写成
+			// real。auto 的展开也是 real（派生身份实测领不到额度），所以这次迁移
+			// 只是把「用户没手动指定过」这件事标记出来（面板上显示「自动」，
+			// 与手动 real 区分得开），行为不变。
 			// 判定「用户没真改过」：没配代理 + profile 目录就是按邮箱自动生成的那个
-			// （目录名 = 邮箱短哈希）。这种条目迁移到 auto，由号池顺序决定
-			// 第一个号 real、其余 derived；配了代理或改过目录名的条目保持不动。
+			// （目录名 = 邮箱短哈希）。配了代理或改过目录名的条目保持不动。
 			prof.DeviceMode = QoderDeviceModeAuto
 			prof.UpdatedAt = time.Now().Format(time.RFC3339)
 			acctChanged = true

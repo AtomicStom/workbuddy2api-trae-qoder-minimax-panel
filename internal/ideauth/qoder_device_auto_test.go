@@ -13,11 +13,13 @@ func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
 // TestQoderAutoDeviceAssignment 锁死「设备身份自动分配」的规则：
 //
-//   - 号池第一个号 → real（与客户端运行时身份一致）；
-//   - 其余号 → derived（按邮箱确定性派生，任意两个号必然不同）。
+// ⚠️ 2026-11-15 实测修正：auto 原先是「号池第一个号 real、其余 derived」。
+// 实测当天 gmail 号生效身份是 derived → 领不到当天额度（pending），
+// 改成 real → 立刻 +100 Credits。所以 auto 的展开改成 **real**（全部号）。
 //
 // 用户诉求（2026-11-14）：「设备是真实设备还是邮箱派生必须手动去调，
-// 应该自动生成，反正俩肯定应该不一样」。
+// 应该自动生成，反正俩肯定应该不一样」—— 但「能领到」优先级更高：
+// 派生身份实测被上游按设备维度过滤掉额度。
 func TestQoderAutoDeviceAssignment(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("IDEAUTH_POOL_DIR", dir)
@@ -53,16 +55,22 @@ func TestQoderAutoDeviceAssignment(t *testing.T) {
 		}
 	}
 
-	// 展开后的生效值：第一个 real，其余 derived —— 任意两个号必然不同。
+	// 展开后的生效值：**全部 real** —— auto 不再把非首个号派成 derived
+	// （派生身份实测领不到每日额度）。
 	want := map[string]string{
 		"first@test.com":  QoderDeviceModeReal,
-		"second@test.com": QoderDeviceModeDerived,
-		"third@test.com":  QoderDeviceModeDerived,
+		"second@test.com": QoderDeviceModeReal,
+		"third@test.com":  QoderDeviceModeReal,
 	}
 	for email, w := range want {
 		if got := QoderEffectiveDeviceMode(email, eg.Profiles[email].DeviceMode); got != w {
 			t.Errorf("%s 的生效设备模式应为 %q，实际 %q", email, w, got)
 		}
+	}
+
+	// 显式 derived 仍然尊重手动配置（手动优先于自动）。
+	if got := QoderEffectiveDeviceMode("second@test.com", QoderDeviceModeDerived); got != QoderDeviceModeDerived {
+		t.Errorf("显式 derived 应被尊重，实际 %q", got)
 	}
 
 	// 幂等：再跑一次不产生改动。
@@ -124,9 +132,9 @@ func TestQoderEgressLegacyRealMigratedToAuto(t *testing.T) {
 
 // TestQoderEgressIndependentUnderAuto 锁死 auto 模式下的「独立出口」判定：
 //
-// 号池非首个号的**生效**设备模式是 derived（配置原值是 auto），它必须被判为
-// 「独立」—— 2026-11-14 修的真 bug：原来只比对配置原值 "derived"，auto 下
-// 第二个号会被误判成「不独立」，签到策略随之退化成 unknown。
+// auto 展开为 real ⇒ 默认**没有**独立身份；只有显式 derived 或配了代理才算独立。
+// 2026-11-15 修的真 bug：原来 auto 把非首个号派成 derived，而判定只看配置原值
+// "derived"，两边口径不一致，签到策略会退化成 unknown。
 func TestQoderEgressIndependentUnderAuto(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("IDEAUTH_POOL_DIR", dir)
@@ -143,10 +151,17 @@ func TestQoderEgressIndependentUnderAuto(t *testing.T) {
 		t.Fatal(err)
 	}
 	if qoderEgressIndependentForEmail("first@test.com") {
-		t.Error("号池第一个号用真实设备，不应判为独立出口")
+		t.Error("auto（=real）不应判为独立出口")
+	}
+	if qoderEgressIndependentForEmail("second@test.com") {
+		t.Error("auto（=real）不应判为独立出口")
+	}
+	// 显式 derived → 独立。
+	if _, err := SetQoderEgress("second@test.com", QoderDeviceModeDerived, "", ""); err != nil {
+		t.Fatal(err)
 	}
 	if !qoderEgressIndependentForEmail("second@test.com") {
-		t.Error("auto 下第二个号的生效设备是派生设备，应判为独立出口")
+		t.Error("显式 derived 应判为独立出口")
 	}
 }
 

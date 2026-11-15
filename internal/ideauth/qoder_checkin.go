@@ -1369,43 +1369,41 @@ func QoderDeviceForAccount2(email, uid string) (*QoderDevice, error) {
 //
 // configured = 该号在 qoder_egress.json 里配的原始值（可能为空 / auto）。
 //
-// 规则（2026-11-14 新增 auto 自动分配）：
+// 规则（2026-11-15 实测修正）：
 //   - 显式配了 real / derived → 尊重手动配置（手动优先）；
-//   - 配了 auto 或没配 → 按**号池顺序**自动分配：
-//     号池里第一个号 = real（与客户端运行时身份一致），
-//     其余号 = derived（按邮箱确定性派生，彼此不同）。
+//   - 配了 auto 或没配 → **real**（本机真实设备身份）。
 //
-// 为什么按顺序而不是按「客户端当前登录的是谁」：客户端登录的号会变，
-// 用它当锚点会让设备身份**随切号漂移**（同一号今天 real、明天 derived，
-// 上游按设备过滤时就会表现成「今天领得到、明天领不到」）。
-// 号池顺序稳定（号池文件里的账号顺序），所以同一号永远同一套身份。
+// ⚠️ 2026-11-15 更正（这条结论被实测推翻）：auto 原先是「号池第一个号 real、
+// 其余号 derived（按邮箱派生）」。实测当天：
 //
-// ⚠️ 「号池顺序」的确切含义：号池文件 `qoder_accounts.json` 里 accounts 数组的
-// 顺序 —— 而 saveQoderPool 在落盘时会**按邮箱字典序排序**（见 qoder_pool.go），
-// 所以「第一个号」实际是**邮箱字典序最小**的那个账号，不是「最先添加的」。
-// 字典序稳定 → 同一号永远同一套身份；新增账号理论上可能插到前面，但那只会让
-// 某个号在 real/derived 之间换一次 —— 两种身份实测都能正常归属额度
-// （2026-11-15 实测：derived 身份查 reward 拿到的 grantId 与真实身份完全一致），
-// 不会导致领不到。
+//	x=xxx@gmail.com 生效身份 derived → 面板 pending（今天没额度、领不到）
+//	同一号改成 real                      → 立刻签到成功 +100 Credits
 //
-// 自动分配保证「任意两个号必然不同」：real 只有第一个号，
-// 其余全是按邮箱派生的独立身份。
+//	即 **派生身份会被上游按设备维度过滤掉每日额度**，拿不到今天的活动实例。
+//	（此前「derived 也能看到活动列表」的结论来自一个写错了的探针：只打了国际版
+//	 那一个 base，而签到链路会按 scope 试多个 base。）
+//
+// 所以 auto 的默认展开改为 real：**能领到 > 身份不同**。
+// derived 保留为**手动**选项（确实需要隔离设备指纹时用），但要清楚它可能领不到额度。
+//
+// 为什么 auto 不再「按号池顺序分配」：顺序分配意味着非首个号必然是 derived，
+// 而 derived 实测领不到额度 —— 那等于「自动」把第二个号自动配成领不到的状态。
 func QoderEffectiveDeviceMode(email, configured string) string {
 	m := strings.ToLower(strings.TrimSpace(configured))
 	switch m {
 	case QoderDeviceModeReal, QoderDeviceModeDerived:
 		return m
 	}
-	// auto 或未配置 → 自动分配。
-	if qoderIsFirstPoolAccount(email) {
-		return QoderDeviceModeReal
-	}
-	return QoderDeviceModeDerived
+	// auto 或未配置 → 真实设备（2026-11-15 实测：只有它能稳定领到每日额度）。
+	return QoderDeviceModeReal
 }
 
 // qoderIsFirstPoolAccount 判断该号是否是号池里的第一个账号。
 //
 // 用号池文件里的账号顺序（稳定），而不是 map 遍历顺序（随机）。
+//
+// ⚠️ 2026-11-15：设备模式已不再「按号池顺序」自动分配（改成默认全部 real，
+// 因为派生身份实测领不到额度）。本函数保留给「号池首个号」这类只读展示用途。
 func qoderIsFirstPoolAccount(email string) bool {
 	key := normalizeQoderEmail(email)
 	if key == "" {

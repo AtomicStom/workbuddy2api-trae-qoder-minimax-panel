@@ -23,11 +23,10 @@ func useTempEgressFile(t *testing.T) string {
 
 // 验收①：无配置时的默认行为。
 //
-// ⚠️ 2026-11-14 更正：这里原来断言「无配置时 device_mode 必须是 real，且与
-// QoderDeviceInfo() 完全一致」。那个默认值是**历史遗留**：号池里每个号都写成 real
-// → 多个号共用同一台真实设备（用户诉求：「两个号肯定应该不一样」）。
-// 现在默认 device_mode=auto，由号池顺序自动分配：第一个号 real、其余 derived。
-// 下面的断言按新语义重写；「显式配 real 时与真实设备一致」的部分仍然保留。
+// ⚠️ 2026-11-14/15 更正：这里原来断言「无配置时 device_mode 必须是 real，且与
+// QoderDeviceInfo() 完全一致」；随后又改成「auto = 号池首个号 real、其余 derived」。
+// **后者被实测推翻**（派生身份领不到每日额度）—— auto 现在展开为 **real**。
+// 下面的断言按最终语义重写：默认 = auto → 生效 real → 与真实设备完全一致。
 func TestQoderEgressDefaultRealMatchesDeviceInfo(t *testing.T) {
 	path := useTempEgressFile(t)
 
@@ -39,7 +38,7 @@ func TestQoderEgressDefaultRealMatchesDeviceInfo(t *testing.T) {
 		t.Fatalf("无配置时 proxy_url 必须为空，实际 %q", prof.ProxyURL)
 	}
 
-	// 号池第一个号 → real（与真实设备一致）。
+	// auto 展开 = real（与真实设备一致）—— 对所有号都一样，不再按号池顺序区分。
 	poolDir := t.TempDir()
 	t.Setenv("IDEAUTH_POOL_DIR", poolDir)
 	pool := &QoderPoolFile{Accounts: []*QoderSnapshot{
@@ -49,11 +48,10 @@ func TestQoderEgressDefaultRealMatchesDeviceInfo(t *testing.T) {
 	if err := SaveQoderPool(pool); err != nil {
 		t.Fatal(err)
 	}
-	if got := QoderEffectiveDeviceMode(" Mixed@Case.COM ", prof.DeviceMode); got != QoderDeviceModeReal {
-		t.Fatalf("号池第一个号的生效设备模式应为 real，实际 %q", got)
-	}
-	if got := QoderEffectiveDeviceMode("other@example.com", ""); got != QoderDeviceModeDerived {
-		t.Fatalf("其余号的生效设备模式应为 derived，实际 %q", got)
+	for _, email := range []string{" Mixed@Case.COM ", "other@example.com"} {
+		if got := QoderEffectiveDeviceMode(email, prof.DeviceMode); got != QoderDeviceModeReal {
+			t.Fatalf("%s 的生效设备模式应为 real，实际 %q", email, got)
+		}
 	}
 
 	dev, err := QoderDeviceForEmail(" Mixed@Case.COM ")
@@ -65,31 +63,34 @@ func TestQoderEgressDefaultRealMatchesDeviceInfo(t *testing.T) {
 		t.Fatal("QoderDeviceInfo() 返回 nil")
 	}
 	if !reflect.DeepEqual(dev, real) {
-		t.Fatalf("号池第一个号必须与 QoderDeviceInfo 完全一致\n derived/实际: %+v\n 真实设备:     %+v", dev, real)
+		t.Fatalf("默认（auto→real）必须与 QoderDeviceInfo 完全一致\n derived/实际: %+v\n 真实设备:     %+v", dev, real)
 	}
 	if dev.Derived || dev.Synthetic || dev.ProxyURL != "" {
 		t.Fatalf("默认设备不应带派生/代理标记: derived=%v synthetic=%v proxy=%q",
 			dev.Derived, dev.Synthetic, dev.ProxyURL)
 	}
 
-	// 其余号 → 派生设备（Derived=true，Synthetic=false）。
+	// 配置文件必须仍然不存在（读默认值不能顺手创建文件）。
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("读取默认配置不应创建文件 %s（err=%v）", path, err)
+	}
+
+	// 显式 derived 仍然是派生设备（Derived=true，Synthetic=false）。
+	if _, err := SetQoderEgress("other@example.com", QoderDeviceModeDerived, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	dev2, err := QoderDeviceForEmail("other@example.com")
 	if err != nil {
 		t.Fatalf("QoderDeviceForEmail(other): %v", err)
 	}
 	if !dev2.Derived {
-		t.Error("非首个号在 auto 下应为派生设备（Derived=true）")
+		t.Error("显式 derived 应为派生设备（Derived=true）")
 	}
 	if dev2.Synthetic {
 		t.Error("派生设备必须 Synthetic=false（否则上游不下发活动）")
 	}
 	if dev2.MachineID == dev.MachineID {
 		t.Error("两个号的设备指纹必须不同")
-	}
-
-	// 配置文件必须仍然不存在（读默认值不能顺手创建文件）。
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("读取默认配置不应创建文件 %s（err=%v）", path, err)
 	}
 }
 
