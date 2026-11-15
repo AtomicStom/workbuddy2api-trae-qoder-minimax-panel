@@ -506,7 +506,7 @@ func (p *Panel) qoderClaimHistory(w http.ResponseWriter, r *http.Request) {
 
 // qoderEgressGet 返回号池各账号的设备/出口配置（契约 C-QD-API@1 D）。
 //
-// 未配置的账号按默认值返回（device_mode=real、proxy_url 空 = 进程默认网络），
+// 未配置的账号按默认值返回（device_mode=auto = 自动分配，proxy_url 空 = 进程默认网络），
 // 这样前端能直接对每个号做配置，而不是"没配置就看不到"。last_probe 来自
 // C-QD-PROBE@1 的结论摘要（文件不存在时为 null，不编造结论）。
 func (p *Panel) qoderEgressGet(w http.ResponseWriter, r *http.Request) {
@@ -567,7 +567,7 @@ func (p *Panel) qoderEgressGet(w http.ResponseWriter, r *http.Request) {
 
 // qoderEgressSet 写入某账号的设备/出口配置（契约 C-QD-API@1 E）。
 //
-// 请求：{"email":"a@x","device_mode":"real|derived","proxy_url":"http://host:port",
+// 请求：{"email":"a@x","device_mode":"auto|real|derived","proxy_url":"http://host:port",
 // "profile_dir":"..."}。校验失败返回 400 + invalid_device_mode / invalid_proxy_url，
 // 且**不落盘**（校验在 ideauth.SetQoderEgress 内完成）。
 func (p *Panel) qoderEgressSet(w http.ResponseWriter, r *http.Request) {

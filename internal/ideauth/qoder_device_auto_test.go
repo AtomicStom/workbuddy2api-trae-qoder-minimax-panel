@@ -117,6 +117,34 @@ func TestQoderEgressLegacyRealMigratedToAuto(t *testing.T) {
 	}
 }
 
+// TestQoderEgressIndependentUnderAuto 锁死 auto 模式下的「独立出口」判定：
+//
+// 号池非首个号的**生效**设备模式是 derived（配置原值是 auto），它必须被判为
+// 「独立」—— 2026-11-14 修的真 bug：原来只比对配置原值 "derived"，auto 下
+// 第二个号会被误判成「不独立」，签到策略随之退化成 unknown。
+func TestQoderEgressIndependentUnderAuto(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("IDEAUTH_POOL_DIR", dir)
+	t.Setenv("QODER_EGRESS_FILE", filepath.Join(dir, "qoder_egress.json"))
+
+	pool := &QoderPoolFile{Accounts: []*QoderSnapshot{
+		{Email: "first@test.com", Auth: &QoderAuth{Token: "t1", User: QoderUser{Email: "first@test.com"}}},
+		{Email: "second@test.com", Auth: &QoderAuth{Token: "t2", User: QoderUser{Email: "second@test.com"}}},
+	}}
+	if err := SaveQoderPool(pool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureQoderEgress(); err != nil {
+		t.Fatal(err)
+	}
+	if qoderEgressIndependentForEmail("first@test.com") {
+		t.Error("号池第一个号用真实设备，不应判为独立出口")
+	}
+	if !qoderEgressIndependentForEmail("second@test.com") {
+		t.Error("auto 下第二个号的生效设备是派生设备，应判为独立出口")
+	}
+}
+
 // TestQoderResetEgressAuto 锁死「全部恢复自动」：所有号 device_mode=auto，代理保留。
 func TestQoderResetEgressAuto(t *testing.T) {
 	dir := t.TempDir()

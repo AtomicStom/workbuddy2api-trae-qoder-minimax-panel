@@ -1339,7 +1339,8 @@ func qoderCampaignsOf(raw []byte) []QoderCampaign {
 // QoderDeviceForEmail 按账号解析设备指纹与出口（契约 C-QD-DEVICE@1）。
 //
 // 读取 qoder_egress.json：
-//   - real（无配置时的默认值）：返回 QoderDeviceInfo() 的真实设备，字段与现网完全一致；
+//   - auto（默认）：按号池顺序自动分配 —— 第一个号 real，其余 derived；
+//   - real：返回 QoderDeviceInfo() 的真实设备，字段与现网完全一致；
 //   - derived：按 lower(email) 确定性派生 MachineID/MachineToken/MachineCode/
 //     MachineHostname，ClientType/MachineOS/MachineType/Version 复制真实设备；
 //     派生设备 Derived=true、Synthetic=false —— Token/Code 必须真实发送，
@@ -1378,6 +1379,14 @@ func QoderDeviceForAccount2(email, uid string) (*QoderDevice, error) {
 // 用它当锚点会让设备身份**随切号漂移**（同一号今天 real、明天 derived，
 // 上游按设备过滤时就会表现成「今天领得到、明天领不到」）。
 // 号池顺序稳定（号池文件里的账号顺序），所以同一号永远同一套身份。
+//
+// ⚠️ 「号池顺序」的确切含义：号池文件 `qoder_accounts.json` 里 accounts 数组的
+// 顺序 —— 而 saveQoderPool 在落盘时会**按邮箱字典序排序**（见 qoder_pool.go），
+// 所以「第一个号」实际是**邮箱字典序最小**的那个账号，不是「最先添加的」。
+// 字典序稳定 → 同一号永远同一套身份；新增账号理论上可能插到前面，但那只会让
+// 某个号在 real/derived 之间换一次 —— 两种身份实测都能正常归属额度
+// （2026-11-15 实测：derived 身份查 reward 拿到的 grantId 与真实身份完全一致），
+// 不会导致领不到。
 //
 // 自动分配保证「任意两个号必然不同」：real 只有第一个号，
 // 其余全是按邮箱派生的独立身份。
@@ -1514,9 +1523,9 @@ func qoderSHA256(s string) []byte {
 // **人**（服务端判定码 SAME_PERSON_ALREADY_CLAIMED），与账号、scope 都无关。
 // 详见 QoderQuotaGroupKey 与 qoder_person.go。
 //
-// 现在按 qoder_egress.json 的 device_mode 决定：默认 real（真实指纹，现网行为），
-// 显式配置 derived 时才使用派生设备。读取配置失败一律回落到真实设备 ——
-// 签到是无人值守路径，不能因为一个坏掉的配置文件全部失败。
+// 现在按 qoder_egress.json 的 device_mode 决定：默认 auto（按号池顺序自动分配：
+// 首个号 real、其余 derived），显式配置 real/derived 时按配置走。读取配置失败一律
+// 回落到真实设备 —— 签到是无人值守路径，不能因为一个坏掉的配置文件全部失败。
 func qoderDeviceForAccount(auth *QoderAuth) *QoderDevice {
 	email, uid := "", ""
 	if auth != nil {

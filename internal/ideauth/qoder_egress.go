@@ -20,8 +20,9 @@ import (
 // 配置文件：<PoolDir>/qoder_egress.json（可用 QODER_EGRESS_FILE 覆盖），0600，原子写。
 // 键一律使用「小写去空格」的邮箱，避免同一个人在号池里出现两种写法后各配各的。
 //
-// 默认行为（文件不存在 / 账号无配置）：device_mode=real、proxy_url 为空 —— 也就是
-// 现网行为：真实设备指纹 + 进程默认网络。配置只在显式写入后生效，不改变成功路径。
+// 默认行为（文件不存在 / 账号无配置）：device_mode=auto、proxy_url 为空 ——
+// 也就是「设备身份自动分配」：号池第一个号用真实设备，其余号按邮箱派生。
+// proxy_url 留空 = 进程默认网络。配置只在显式写入后生效。
 // ---------------------------------------------------------------------------
 
 // 设备模式枚举。契约 C-QD-EGRESS@1 只允许 real|derived。
@@ -56,7 +57,7 @@ var (
 // QoderEgressProfile 单个账号的出口配置。
 type QoderEgressProfile struct {
 	Email      string `json:"email"`
-	DeviceMode string `json:"device_mode"` // real|derived
+	DeviceMode string `json:"device_mode"` // auto|real|derived
 	ProxyURL   string `json:"proxy_url,omitempty"`
 	ProfileDir string `json:"profile_dir,omitempty"`
 	UpdatedAt  string `json:"updated_at"`
@@ -159,7 +160,7 @@ func saveQoderEgressLocked(p *QoderEgressPool) error {
 	return nil
 }
 
-// QoderEgressFor 返回账号的出口配置；无配置返回 {DeviceMode:"real"}。
+// QoderEgressFor 返回账号的出口配置；无配置返回 {DeviceMode:"auto"}。
 //
 // 读文件失败（损坏/无权限）也按「未配置」处理：设备解析是签到前置步骤，
 // 不能因为一个坏掉的配置文件把整个签到链路打死；需要严格报错的调用方用
