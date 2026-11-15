@@ -126,9 +126,15 @@ const (
 //	所以现在 pending 的含义回到「**这台设备身份下没看到**当天额度」，
 //	而不是「上游没给这个号下发」。文案必须说清区别 —— 否则用户会去折腾
 //	重新登录（那个动作解决不了设备身份不匹配）。
-const qoderPendingNotAssignedMsg = "当前两套设备身份（国际版环境码 3 / 国内版环境码 0）下都没有看到本号的今日每日额度；" +
+//
+// ⚠️ 2026-11-15 补强：现在 pending 的判定有**三层**证据（见 qoderPendingMsgFor）——
+// 客户端身份能看到 / 真实设备身份能看到 / 两套环境码都看不到。
+// 走到这一条说明「客户端身份、真实身份、两套环境码全都查不到今天的额度」，
+// 才敢下「上游没给本号下发」的结论。
+const qoderPendingNotAssignedMsg = "上游今天确实没给本号下发每日额度" +
+	"（已用国际版环境码 3 / 国内版环境码 0 两套环境码、以及真实设备身份分别复查，均查不到今天的每日额度）；" +
 	"已核实：这份额度没有被号池里的其它账号领走。" +
-	"面板会在后台自动重试；若 Qoder 客户端里能看到该号的任务，请检查该号的设备/出口配置。"
+	"面板会在后台自动重试（Qoder 每天 10:00 后下发）。"
 
 // qoderPendingDeviceMismatchMsg 设备身份与客户端不一致导致看不到额度时的说明。
 //
@@ -141,6 +147,17 @@ const qoderPendingDeviceMismatchMsg = "客户端里能看到这个号的今日�
 	"原因是面板使用的设备身份与 Qoder 客户端运行时的身份不一致（面板拿到的是另一套机器指纹），" +
 	"上游按设备身份过滤每日额度，身份对不上就会静默不下发（不报错、不 401）。" +
 	"面板现在会按账号自动尝试国际版/国内版两套环境码；若仍不一致，请检查该号的设备/出口配置"
+
+// qoderPendingDeviceFilteredMsg 上游按**面板当前设备身份**过滤掉了本号额度时的说明。
+//
+// 触发条件（2026-11-15 新增）：用**真实设备身份**查本号能看到今天的每日额度，
+// 但用面板当前身份（auto 分配出来的 derived，或手动配的其它模式）查不到 ——
+// 说明是**当前这套设备身份**被上游过滤掉了，不是上游没给本号下发。
+//
+// 典型场景：多号场景下号池非首个号被分配成 derived 设备后，上游按设备维度过滤。
+const qoderPendingDeviceFilteredMsg = "上游按**当前这套设备身份**过滤掉了本号的今日额度：" +
+	"换成真实设备身份就能查到（同账号、同 token），说明不是上游没给本号下发。" +
+	"请到该号的「设备/出口」里把设备模式改回「真实设备」，或点「全部恢复自动」后重试。"
 
 // qoderClientClaimableDaily 客户端当前登录号在**客户端身份**下是否能看到
 // 当天可领的每日额度（actionType=CLAIM_BENEFIT 且 claimStatus=CLAIMABLE）。
@@ -196,15 +213,68 @@ func qoderHasClaimableDaily(raw []byte) bool {
 	return false
 }
 
+// qoderHasDailyCampaignToday 判断 campaigns 响应里有没有**今天**的每日额度活动
+// （CLAIM_BENEFIT 且开始时间落在今天，UTC+8）。不区分 claimStatus ——
+// 「今天有这条活动」和「今天这条已被领过」都属于「上游给本号下发了今天的额度」。
+func qoderHasDailyCampaignToday(raw []byte) bool {
+	now := time.Now().In(qoderCST)
+	for _, c := range qoderCampaignsOf(raw) {
+		if c.ActionType != qoderClaimAction {
+			continue
+		}
+		start := time.Unix(c.StartAt, 0).In(qoderCST)
+		if start.Year() == now.Year() && start.YearDay() == now.YearDay() {
+			return true
+		}
+	}
+	return false
+}
+
+// qoderRealIdentitySeesDaily 用**真实设备身份**只读地再查一次今天的每日额度。
+//
+// 用途（2026-11-15）：区分两种长得很像、结论完全不同的 pending：
+//   - 本号用**当前**设备身份查不到今天的额度，但用**真实设备身份**能查到
+//     ⇒ 上游按设备身份把本号过滤掉了（设备模式配错 / 身份不匹配）；
+//   - 两种身份都查不到 ⇒ 上游确实没给本号下发今天的额度。
+//
+// 安全��：campaigns 是**按账号 token** 返回的（实测：用真实身份查 gmail 号，
+// 只会看到 gmail 自己的活动，看不到另一个号的额度），所以对照不会串号。
+//
+// 只读：不 POST claim、不触发 refresh（refresh 会消费并轮换 refresh_token）。
+func qoderRealIdentitySeesDaily(auth *QoderAuth, uid, scope string) bool {
+	if auth == nil || strings.TrimSpace(auth.Token) == "" {
+		return false
+	}
+	dev := QoderDeviceInfoForEnvCode(uid, "3")
+	if dev == nil {
+		return false
+	}
+	for _, b := range qoderOpenAPIBaseListForScope(scope) {
+		st, raw, err := qoderDo(b, qoderPathCampaigns, http.MethodGet, auth.Token, nil, dev)
+		if err != nil || st != http.StatusOK {
+			continue
+		}
+		if qoderHasDailyCampaignToday(raw) {
+			return true
+		}
+	}
+	return false
+}
+
 // qoderPendingMsgFor 返回该号 pending 时应展示的说明。
 //
-// 判定顺序（2026-11-10）：
+// 判定顺序（2026-11-10 起，2026-11-15 补齐第三层）：
 //  1. 客户端当前登录的这个号在**客户端身份**下能看到当天可领额度 ⇒
 //     是面板设备身份不匹配，文案必须直说（而不是含糊说「上游没下发」）；
-//  2. 否则才是「上游确实没给本号下发」。
-func qoderPendingMsgFor(email string) string {
+//  2. 用**真实设备身份**能查到今天的额度、但用面板当前身份查不到 ⇒
+//     上游按设备身份过滤掉了本号（auto/derived 分配或手动配置的问题）；
+//  3. 否则才是「上游确实没给本号下发」。
+func qoderPendingMsgFor(email string, auth *QoderAuth, uid, scope string) string {
 	if qoderClientClaimableDaily(email) {
 		return qoderPendingDeviceMismatchMsg
+	}
+	if qoderRealIdentitySeesDaily(auth, uid, scope) {
+		return qoderPendingDeviceFilteredMsg
 	}
 	return qoderPendingNotAssignedMsg
 }
@@ -714,7 +784,10 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 			// 服务端明确说：本号与对方**不是同一个人**，今天这份额度不归本号，
 			// 也不是被对方抢走 —— 就是「服务端今天没给本号下发」。
 			p.res.Phase = QoderPhasePending
-			p.res.Msg = qoderPendingMsgFor(email)
+			p.res.Msg = qoderPendingMsgFor(email,
+				qoderPoolAuth(pool.Accounts, key),
+				qoderPoolUID(pool.Accounts, key),
+				qoderPoolScope(pool.Accounts, key))
 			p.res.CheckedInToday = false
 			p.res.QuotaTakenBy = ""
 		default:
@@ -1596,6 +1669,40 @@ func qoderPoolAuth(accounts []*QoderSnapshot, email string) *QoderAuth {
 	return nil
 }
 
+// qoderPoolUID 按邮箱取号池里某个账号的 uid（找不到返回空串）。
+func qoderPoolUID(accounts []*QoderSnapshot, email string) string {
+	ex := normalizeQoderEmail(email)
+	if ex == "" {
+		return ""
+	}
+	for _, a := range accounts {
+		if a == nil {
+			continue
+		}
+		if normalizeQoderEmail(qoderSnapshotEmail(a)) == ex {
+			return strings.TrimSpace(a.UserID)
+		}
+	}
+	return ""
+}
+
+// qoderPoolScope 按邮箱取号池里某个账号的 scope（找不到返回空串）。
+func qoderPoolScope(accounts []*QoderSnapshot, email string) string {
+	ex := normalizeQoderEmail(email)
+	if ex == "" {
+		return ""
+	}
+	for _, a := range accounts {
+		if a == nil {
+			continue
+		}
+		if normalizeQoderEmail(qoderSnapshotEmail(a)) == ex {
+			return strings.TrimSpace(a.Scope)
+		}
+	}
+	return ""
+}
+
 // QuotaHolderInGroup 返回**与指定账号同一个人**的账号里，今天已领到每日额度的那一个。
 //
 // 2026-11-02 修正：每日额度按**人**发（实测 failureCode=SAME_PERSON_ALREADY_CLAIMED），
@@ -2013,7 +2120,9 @@ func QoderPoolScan(emails []string) []QoderScanAccount {
 				qoderForgetPersonLinkIfContradicted(em, other, QoderVerdictOther)
 				r.DeviceQuotaUsed = false
 				r.QuotaTakenBy = ""
-				r.Msg = qoderPendingMsgFor(em)
+				r.Msg = qoderPendingMsgFor(em, myAuth,
+					qoderPoolUID(pool.Accounts, em),
+					qoderPoolScope(pool.Accounts, em))
 				verdictByEmail[em] = QoderVerdictOther
 			}
 			break

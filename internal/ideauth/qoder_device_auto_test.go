@@ -3,8 +3,13 @@ package ideauth
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 )
+
+// itoa 便于构造测试用的 campaigns JSON。
+func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
 // TestQoderAutoDeviceAssignment 锁死「设备身份自动分配」的规则：
 //
@@ -142,6 +147,47 @@ func TestQoderEgressIndependentUnderAuto(t *testing.T) {
 	}
 	if !qoderEgressIndependentForEmail("second@test.com") {
 		t.Error("auto 下第二个号的生效设备是派生设备，应判为独立出口")
+	}
+}
+
+// TestQoderHasDailyCampaignToday 锁死「今天的每日额度」判定：
+// 只有 actionType=CLAIM_BENEFIT 且开始时间落在今天（UTC+8）才算数。
+func TestQoderHasDailyCampaignToday(t *testing.T) {
+	now := time.Now().In(qoderCST)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, qoderCST).Unix()
+	yesterdayStart := todayStart - 24*3600
+
+	raw := func(start int64, action, claimStatus string) []byte {
+		return []byte(`{"campaigns":[{"campaignId":"cid-1","actionType":"` + action +
+			`","claimStatus":"` + claimStatus + `","startAt":` + itoa(start) +
+			`,"endAt":` + itoa(start+86400) + `,"benefit":{"amount":100}}]}`)
+	}
+	if !qoderHasDailyCampaignToday(raw(todayStart, qoderClaimAction, "CLAIMABLE")) {
+		t.Error("今天的 CLAIM_BENEFIT 应被识别为今天有额度")
+	}
+	if !qoderHasDailyCampaignToday(raw(todayStart, qoderClaimAction, "CLAIMED")) {
+		t.Error("今天已领取的 CLAIM_BENEFIT 也算「上游给本号下发了今天的额度」")
+	}
+	if qoderHasDailyCampaignToday(raw(yesterdayStart, qoderClaimAction, "CLAIMED")) {
+		t.Error("昨天的 CLAIM_BENEFIT 不算今天有额度")
+	}
+	if qoderHasDailyCampaignToday(raw(todayStart, "VIEW_DETAILS", "CLAIMED")) {
+		t.Error("VIEW_DETAILS 不是每日额度")
+	}
+}
+
+// TestQoderPendingMsgForNoAuth 锁死「没有凭证时不得 panic、也不得瞎下结论」。
+func TestQoderPendingMsgForNoAuth(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("IDEAUTH_POOL_DIR", dir)
+	t.Setenv("QODER_EGRESS_FILE", filepath.Join(dir, "qoder_egress.json"))
+
+	got := qoderPendingMsgFor("nobody@test.com", nil, "", "")
+	if got == "" {
+		t.Fatal("没有凭证时也应给出一句说明")
+	}
+	if got == qoderPendingDeviceFilteredMsg {
+		t.Error("没有凭证时不能断言「被设备身份过滤」")
 	}
 }
 
