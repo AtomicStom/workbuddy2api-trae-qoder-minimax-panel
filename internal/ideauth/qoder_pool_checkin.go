@@ -1258,11 +1258,17 @@ func QoderStrategyFor(email, phase, quotaTakenBy string, groupSize int, verdict 
 
 // qoderEgressIndependentForEmail 报告该账号是否使用独立设备/出口。
 //
-// 「独立」的口径来自 qoder_egress.json：device_mode=derived 或配置了 proxy_url。
+// 「独立」的口径来自 qoder_egress.json：设备模式解析为 derived 或配置了 proxy_url。
 // 读取失败按「未配置」处理（QoderEgressFor 的既有语义），与签到侧设备解析一致。
+//
+// ⚠️ 2026-11-14 更正：原来只比对**配置原值** "derived"。auto 自动分配模式下，
+// 号池非首个号的**生效**模式就是 derived（配置原值是 "auto"）——只比原值会把它
+// 误判成「不独立」，进而把签到策略判成 unknown。必须用 QoderEffectiveDeviceMode
+// 取**展开后**的生效模式。
 func qoderEgressIndependentForEmail(email string) bool {
 	prof := QoderEgressFor(email)
-	return strings.EqualFold(strings.TrimSpace(prof.DeviceMode), QoderDeviceModeDerived) ||
+	mode := QoderEffectiveDeviceMode(email, prof.DeviceMode)
+	return strings.EqualFold(strings.TrimSpace(mode), QoderDeviceModeDerived) ||
 		strings.TrimSpace(prof.ProxyURL) != ""
 }
 
