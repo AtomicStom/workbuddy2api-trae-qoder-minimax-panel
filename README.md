@@ -5,12 +5,12 @@
 <h1 align="center">WorkBuddy2API Panel</h1>
 
 <p align="center">
-  <b>一个面板，统管 WorkBuddy / CodeBuddy / Trae / Qoder / MiniMax / 豆包 / 华为云 CodeArts 全部账号 → 统一 OpenAI 兼容网关</b><br>
+  <b>一个面板，统管 WorkBuddy / CodeBuddy / Trae / Qoder / MiniMax / 豆包 / 华为云 CodeArts / Google Gemini 全部账号 → 统一 OpenAI 兼容网关</b><br>
   Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 流式 / 非流式
 </p>
 
 <p align="center">
-  <b>Multi-platform AI account hub: WorkBuddy · CodeBuddy · Trae · Qoder · MiniMax · Doubao · Huawei Cloud CodeArts — one OpenAI-compatible gateway + web panel.</b><br>
+  <b>Multi-platform AI account hub: WorkBuddy · CodeBuddy · Trae · Qoder · MiniMax · Doubao · Huawei Cloud CodeArts · Google Gemini — one OpenAI-compatible gateway + web panel.</b><br>
   Account pool rotation · circuit breaker · session stickiness · daily check-in / keep-alive for every platform · one-click growth tasks.
 </p>
 
@@ -51,10 +51,11 @@
 > | **MiniMax Code** | 账号池 | **浏览器登录**（OAuth 设备码 + S256 PKCE，无需本机客户端）、签到、积分、**凭证自动续期**（1h token / 轮换 RT 双向同步客户端）、模型通道（`minimax:` 前缀） |
 > | **豆包（Doubao）** | Cookie 签到池 | 签到（CDP 无头浏览器通道）、多账号、客户端 Cookie 一键提取 / 手动粘贴 |
 > | **华为云 CodeArts（码道）** | Cookie 签到池 | 浏览器登录抓取会话、每日领取签到、**积分总览**（每天可领 / 剩余 / 将过期）、多账号各自独立会话 |
+> | **Google Gemini** | 官方 API Key 通道 | 密钥文件分组管理、模型列表动态拉取（64 个模型）、OpenAI 兼容直调（`gemini:` 前缀），**无签到**（官方计费） |
 >
 > - 面板左侧「**IDE 账号池**」视图统管 Qoder / Trae IDE / WorkBuddy 三套客户端账号（添加、切号、移除、积分、签到）。
 > - 面板「**签到池**」视图的「**一键签到**」一个按钮覆盖 **主号池 + WorkBuddy + Qoder + MiniMax + Trae + 豆包** 全部平台，并按平台分别统计成功 / 已签 / 失败。
-> - 模型按 **realm 前缀**分流：`cn:`（国服 CodeBuddy）、`global:`（国际版）、`trae:`（Trae 通道）、`minimax:`（MiniMax 通道）—— 同一套 `/v1/chat/completions` 与 `/v1/responses` 端点即可调用全部平台的模型。
+> - 模型按 **realm 前缀**分流：`cn:`（国服 CodeBuddy）、`global:`（国际版）、`trae:`（Trae 通道）、`minimax:`（MiniMax 通道）、`gemini:`（Google Gemini 官方 API Key 通道）—— 同一套 `/v1/chat/completions` 与 `/v1/responses` 端点即可调用全部平台的模型。
 > - 账号凭证（`accessToken` / `refreshToken`）只落在本机 `auths/`、`data/`，**不入库**。
 
 > ### 🔎 这个仓库能做什么（关键词索引）
@@ -145,6 +146,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 📊 **可观测** | 每请求一行表格日志（TTFB / token 速率 / uid）；`/healthz` 带 `service` 身份标识可接负载均衡 / 宿主探活 |
 | 💾 **状态持久化** | 池状态本地原子落盘 + Upstash Redis 异步镜像（可选），重启择新恢复 |
 | 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题，九个视图）：账号池运维 / 签到池 / 用量与积分分析 / 任务中心 / IDE 账号池 / 模型档位条件查询 / 在线改配置（热生效）/ 运行日志（含**调用来源 IP·UA** 与时间区间），见 [Web 管理面板](#-web-管理面板) |
+| 🤖 **Gemini 官方 API Key 通道** | 挂载 Google 官方 API Key，用 `gemini:` 模型前缀直接调用（上游本身 OpenAI 兼容）；密钥分组管理、多 key 轮换、支持出站代理，见 [Google Gemini 官方 API Key 通道](#-google-gemini-官方-api-key-通道) |
 
 ## 🎯 成长任务一键完成（17/18）
 
@@ -238,6 +240,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | **浏览器内 OAuth 添加账号** | 面板「添加账号」按钮完成设备授权 → 凭证落盘 → **热加载进池（免重启）**，替代命令行 `login.sh` 流程 |
 | **MiniMax 浏览器登录** | OAuth 2.0 设备码（RFC 8628）+ **强制 S256 PKCE**：面板出验证码与授权链接，浏览器登录完自动换 token 入号池并签到；国际版端点与网关基址整体切到 `account.minimax.io` / `agent.minimax.io`（号池按账号记 `region`，续期与签到各走各的域） |
 | **豆包（Doubao）签到池** | 客户端 Cookie 提取 / 手动粘贴两通道，凭据走 CDP 无头浏览器通道打豆包签到接口；实测可真实扫到（返回当天已签与上游签到规则原文） |
+| **Google Gemini 官方 API Key 通道** | `internal/gemini`，模型名带 `gemini:` 前缀。上游 `generativelanguage.googleapis.com/v1beta/openai` **本身就是 OpenAI 兼容**，故只做「改写 model + 带 key 转发 + 流式透传」，不做协议翻译。密钥文件 `data/gemini_api_keys.json` 分组管理（每组一个模型前缀，便于「订阅 / 按量」隔离），组内多 key 轮换 |
 | **在线配置编辑（热生效）** | 面板直接改 `config.json`：API 密钥 / `soft_rate` / 脱敏开关 / 池参数 / 任务排程**立即生效**；装配期字段（listen 等）保存后提示需重启。写入采用深合并 + 原子替换，保留未知键 |
 | **积分任务体系** | 任务列表 / 接受 / 领取接口 + 面板弹窗；「一键完成」覆盖 **17 个任务**（对话 / 领养 / 桌面行为链 / 模板 / 灵感案例 / 画布 / 专家召唤 / 技能尝鲜 / 主题 / 资料库 / 夜猫子等），推进进度、等待异步计分落定后**自动领奖**，纯 API 零客户端依赖 |
 | **首启自动生成配置** | 目录下无 `config.json` 时自动生成推荐配置（含 `crypto/rand` 随机 `api_key`），双击即开 |
@@ -286,6 +289,8 @@ flowchart LR
     P -. "状态镜像" .-> REDIS[("Upstash Redis\n可选")]
     U -->|"chat/completions (SSE)"| CB["CodeBuddy\ncopilot.tencent.com"]
     U -->|"billing / auth / growth"| CB
+    H --> GM["Gemini 通道\ninternal/gemini"]
+    GM -->|"chat/completions (OpenAI 兼容)"| GE["Google Gemini\ngenerativelanguage\n.googleapis.com"]
 ```
 
 上游请求在出站前经历统一的改写管线（`internal/upstream/payload.go`）：强制 `stream:true`、`developer` 角色归一、tool_choice 归一、`image_url` 字符串兼容为 OpenAI 对象形态、DeepSeek 思维链注入、`reasoning_effort` 档位降级、`reasoning_content` 回填、指纹脱敏。
@@ -458,6 +463,77 @@ curl -s http://localhost:7863/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":false}'
 ```
+
+## 🤖 Google Gemini 官方 API Key 通道
+
+除账号池外，网关还可直接挂 **Google Gemini 官方 API Key**——把它当成又一个平台，用同一套 OpenAI 兼容端点调用。
+
+### 配置
+
+密钥文件放在 `state_file` 同目录，默认 `data/gemini_api_keys.json`（**不入库**）：
+
+```json
+{
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "enabled": true,
+  "proxy_url": "http://127.0.0.1:10808",
+  "groups": [
+    {
+      "id": "gemini",
+      "name": "Gemini 官方",
+      "keys": ["AQ.Ab8RN6…"]
+    },
+    {
+      "id": "gemx",
+      "name": "Gemini 备用",
+      "keys": ["AQ.Ab8RN6…"]
+    }
+  ]
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `base_url` | 上游地址；留空 = 用内置默认 `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `enabled` | `false` = 通道整体关闭（`/v1/models` 不出现 `gemini:` 条目） |
+| `proxy_url` | **出站代理**；留空则按「环境变量 `HTTPS_PROXY`/`HTTP_PROXY` → Windows 系统代理注册表」依次回退 |
+| `groups[].id` | **模型前缀**：`id` 为 `gemini` ⇒ 模型名 `gemini:gemini-3-flash-preview`；多组可把「订阅」与「按量」彻底隔离，互不抢额度 |
+| `groups[].keys` | 该组的 API Key 列表，组内**轮换**；单 key 失效/欠费/限流（401 / 402 / 429）自动换下一把 |
+
+> 兼容老格式 `{"keys":[…]}`：会被当作 `id=gemini` 的单个分组。
+
+### 出站代理（重要）
+
+Gemini 在部分网络环境下**不可直连**。本项目实测：直连 `generativelanguage.googleapis.com` 25 秒超时，走本机 HTTP 代理则 **683ms 返回 HTTP 200**。
+
+代理地址的解析优先级：
+
+1. 密钥文件里的 `proxy_url`（最可控，推荐显式写）；
+2. 环境变量 `HTTPS_PROXY` / `HTTP_PROXY`；
+3. **Windows 注册表系统代理**（`ProxyEnable=1` + `ProxyServer`，即浏览器/Electron 用的那套）。
+
+三条都取不到才直连。这里**刻意不用** Go 的 `http.ProxyFromEnvironment`——它只读环境变量、**不读注册表**，而服务由计划任务拉起时环境变量常被清空，结果就是静默直连卡死（旧版本 502 的真正成因）。
+
+### 调用
+
+```bash
+# 模型列表（动态拉取上游，缓存 30 分钟）
+curl -s http://localhost:7863/v1/models -H "Authorization: Bearer your-api-key"
+
+# 对话（流式 / 非流式皆可，上游原样透传）
+curl -s http://localhost:7863/v1/chat/completions \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini:gemini-3-flash-preview","messages":[{"role":"user","content":"hi"}]}'
+```
+
+模型名带 `gemini:` 前缀时，网关会把它路由到 Gemini 通道并剥掉前缀再发给上游；其它前缀（`cn:` / `global:` / `trae:` / `minimax:`）走原有逻辑，**互不干扰**。
+
+### 已知边界（均为实测）
+
+- **免费层配额有限**：`gemini-3.1-pro-preview` 等 Pro 系模型在免费 key 上返回 `429`（额度为 0，约 5 小时重置），Flash 系可用；
+- **`gemini-2.5-flash` / `gemini-2.5-pro` 已被 Google 对新用户下线**（返回 404 并提示改用新模型），模型列表里仍会出现，别据此判断可用性；
+- **模型可用性以上游为准**：同一个 key 的不同模型状态可能不同（403 / 404 / 429 / 503 都实测出现过）。
 
 ## 配置说明
 
@@ -1216,6 +1292,10 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 | Redis 粘性镜像 7 天 TTL | `internal/redisstore/redisstore.go:21` |
 | 静态模型表含 `deepseek-v4-flash` 等 | `internal/upstream/model.json`（`deepseek-v4-flash` 条目） |
 | `/v1/responses` 协议适配层 | `internal/server/responses.go`（请求/响应翻译）、`internal/server/responses_stream.go`（SSE 事件翻译）、注册 `internal/server/handler.go` |
+| Gemini 通道按 `gemini:` 前缀分流（在 realm 判断与选号之前） | `internal/server/handler.go` chatCompletions 分流段、`internal/server/gemini.go` |
+| Gemini 上游模型 id 剥 `models/` 前缀 | `internal/gemini/gemini.go` Models 段（`strings.TrimPrefix(id, "models/")`） |
+| Gemini 出站代理解析（配置 > 环境变量 > 注册表系统代理） | `internal/gemini/proxy.go`（`resolveProxy`）、`internal/gemini/proxy_windows.go`（读注册表） |
+| Gemini 400 只在 body 明说 key 失效时才轮换 key | `internal/gemini/gemini.go` `bodyIndicatesBadKey` |
 
 ## 📦 归档：原各平台独立项目
 

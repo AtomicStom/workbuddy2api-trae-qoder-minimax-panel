@@ -1,6 +1,46 @@
 # 变更日志
 
-## 2026-11-15（v1.15.9-panel）
+## 2026-11-17（v1.15.9-panel）
+
+### 新增：Google Gemini 官方 API Key 通道
+
+- 新增 `internal/gemini`：把 **Google 官方 API Key** 接入网关，模型名带 `gemini:` 前缀
+  （例如 `gemini:gemini-3-flash-preview`），同一套 `/v1/chat/completions` 端点直接调用。
+- 上游 `generativelanguage.googleapis.com/v1beta/openai` **本身就是 OpenAI 兼容**，故只做
+  「改写 model + 带 key 转发 + 流式透传」，不做协议翻译。
+- 密钥文件 `data/gemini_api_keys.json`（不入库）：按 `groups` 分组，每组一个模型前缀，
+  便于把「订阅」与「按量」彻底隔离；组内多 key **轮换**，401/402/429 自动换下一把。
+- 分流位置在 `chatCompletions` 的 **realm 判断与选号之前**，按原始 model 字符串判定，
+  不会误伤 `cn:` / `global:` / `trae:` / `minimax:` 等既有前缀。
+
+### 出站代理：Gemini 必须走代理（实测更正）
+
+- ⚠️ **2026-11-17 实测更正**：本通道最初实现为「显式直连（`Proxy: nil`）」，理由是
+  「本机系统代理常拒连」。**该结论方向反了**，实测数据：
+  - 直连 `generativelanguage.googleapis.com` → **25s 超时**；
+  - 走 `http://127.0.0.1:10808` → **683ms 返回 HTTP 200**。
+  ⇒ Gemini 通道**必须走代理**，"直连"才是会挂掉的那条路。
+- 代理地址解析优先级：**配置项 `proxy_url` → 环境变量 `HTTPS_PROXY`/`HTTP_PROXY` →
+  Windows 注册表系统代理**（`ProxyEnable=1` + `ProxyServer`）。
+- 刻意**不用** Go 的 `http.ProxyFromEnvironment`：它只读环境变量、**不读注册表**，
+  而服务由计划任务拉起时环境变量常被清空，结果就是静默直连卡死（旧版 502 的真正成因）。
+- ⚠️ 旧实现里「默认客户端必须直连」的单元测试已随之作废，原文保留在
+  `internal/gemini/gemini_test.go` 并就地标注更正。
+
+### 实测结论（2026-11-17，真打上游）
+
+- `/v1/models` 出现 **64 个** `gemini:` 条目；对话实测 HTTP 200：
+  `gemini-3-flash-preview` / `gemini-3.5-flash` / `gemini-3.1-flash-lite` 均返回真实内容；
+- 流式 `stream:true` → `Content-Type: text/event-stream`，SSE 帧与 `[DONE]` 正常；
+- 免费层配额边界：Pro 系（`gemini-3.1-pro-preview` 等）返回 **429**（额度为 0，约 5h 重置）；
+  `gemini-2.5-flash` / `gemini-2.5-pro` 已被 Google 对新用户下线（**404**）。
+
+### 文档
+
+- README 新增「🤖 Google Gemini 官方 API Key 通道」专节（配置 / 出站代理 / 调用 / 已知边界），
+  并同步平台覆盖表、核心能力表、架构图与「关键断言 ↔ 代码出处」。
+
+## 2026-11-15（v1.15.9-panel，同版本续记）
 
 ### Qoder 设备身份：自动分配，不用手动逐号配
 

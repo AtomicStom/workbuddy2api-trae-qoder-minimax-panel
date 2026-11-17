@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/gemini"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/ideauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/minimax"
@@ -165,6 +166,16 @@ func Run() {
 	mmAPI, mmErr := mmapi.Load(stateSibling(cfg.StateFile, "minimax_api_keys.json"))
 	if mmErr != nil {
 		log.Printf("MiniMax API Key 配置读取失败（通道关闭）: %v", mmErr)
+	}
+
+	// Google Gemini 官方（API Key）：密钥文件与 state 同目录，缺省 data/gemini_api_keys.json。
+	gemAPI, gemErr := gemini.Load(stateSibling(cfg.StateFile, "gemini_api_keys.json"))
+	if gemErr != nil {
+		log.Printf("Gemini API Key 配置读取失败（通道关闭）: %v", gemErr)
+	}
+	if gemAPI != nil {
+		log.Printf("Gemini 通道已启用: %d 个分组, 出站 %s",
+			len(gemAPI.Groups), gemini.DescribeProxy(gemAPI.ProxyURL()))
 	}
 
 	auths, err := auth.LoadDir(cfg.AuthDir)
@@ -415,6 +426,7 @@ func Run() {
 		// 登录态来自客户端 ~/.minimax/auth（每 30s 重读，客户端续期后自动跟进）。
 		Minimax: mmClient,
 		MMAPI:   mmAPI,
+		Gemini:  gemAPI,
 	})
 
 	// Trae 模型通道（trae: 前缀）：与签到共用 checkin_accounts.json，

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/gemini"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
@@ -89,6 +90,9 @@ type Config struct {
 	// MMAPI MiniMax 开放平台通道（OpenAI 兼容 + API Key，按组前缀如 mm: / mms:）。
 	// nil = 未配置密钥。
 	MMAPI *mmapi.Registry
+	// Gemini Google Gemini 官方 API Key 通道（OpenAI 兼容 + API Key，按组前缀如 gemini:）。
+	// nil = 未配置密钥。
+	Gemini *gemini.Registry
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -486,6 +490,8 @@ func (h *Handler) modelList() []map[string]any {
 	out = append(out, h.minimaxModels()...)
 	// MiniMax 开放平台模型名单（前缀 "mm:"）。
 	out = append(out, h.mmModels()...)
+	// Google Gemini 官方模型名单（前缀 "gemini:"）。
+	out = append(out, h.geminiModels()...)
 	return out
 }
 
@@ -612,9 +618,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Trae 通道分流：模型名带 "trae:" 前缀时整条链路交给 traechat 中继
 	// （与 WorkBuddy 的选号/粘性/冷却无关，故在读 body 之后、进池之前分流）。
 	// MiniMax 开放平台（API Key）：按配置里的组前缀分流（mm: / mms: …）。
+	// Google Gemini 官方（API Key）：按配置里的组前缀分流（gemini: / gemx: …）。
 	// 放在 realm 判断之前，组 id 由配置文件决定，无需改代码。
 	if g, bare, ok := h.cfg.MMAPI.Match(peek.Model); ok {
 		h.mmChat(w, r, body, bare, g, st)
+		return
+	}
+	if g, bare, ok := h.cfg.Gemini.Match(peek.Model); ok {
+		h.geminiChat(w, r, body, bare, g, st)
 		return
 	}
 
