@@ -3063,7 +3063,13 @@ function groupItems(d) {
     }
     for (const t of (a.manual || [])) {
       GROWTH_TITLES[t.task_code] = t.title || t.task_code;
-      rows.push({ kind: 'growth', code: t.task_code, prog: t.target ? t.current + '/' + t.target : '—', status: 'manual', message: t.task_desc || t.description || '', action: t.action || 'manual' });
+      const act = t.action || 'manual';
+      // client 分类（国际版 checklist）：上游的 task_desc 只是泛泛的达成条件，
+      // 真正可操作的是逐项客户端指引 —— 指引在前、上游描述在后，两个都给。
+      const hint = act === 'client' ? (INTL_CLIENT_HINT[t.task_code] || '') : '';
+      const desc = t.task_desc || t.description || '';
+      const message = hint ? (desc ? hint + '（' + desc + '）' : hint) : desc;
+      rows.push({ kind: 'growth', code: t.task_code, prog: t.target ? t.current + '/' + t.target : '—', status: 'manual', message, action: act });
     }
     if (rows.length) groups.push({
       uid: a.uid, nick: a.nickname, rows: rows,
