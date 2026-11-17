@@ -1,5 +1,43 @@
 # 变更日志
 
+## 2026-11-17（v1.15.11-panel）
+
+### 新增：国服 `skill_share`（分享一个技能给好友）从「需人工」变为**可一键完成**
+
+**旧结论（原文保留）**：面板把 `skill_share` 归到 manual 桶（无自动动作），README 记的是
+「18 个成长任务里 17 个可自动完成，剩余展示操作指引」。
+
+**⚠️ 2026-11-17 实测更正**：`skill_share`（+50c +5e）**可以纯 API 完成**，判据链四步：
+
+1. **accept 报名**：不 accept 时上游 `target=0`，行为事件不计分；accept 后 `target` 变 1
+   （面板此前把它当 manual，连报名都没做，目标数一直是 0，看起来像「不可做」）。
+2. **取真实市场技能**：`POST /portal/operation-platform/market/skill/list`
+   （GET 该路径返回 404 page not found，**必须 POST**）；编造的 `skillId` 不计数。
+3. **服务端创建分享链接**：`POST /api/v2/open-platform/asset-shares/c2c/channels`，
+   返回 `channel_id` / `share_code`。
+   ⚠️ 请求体里的 `asset_ref` 必须是 **JSON 字符串**且键名为 `asset_id`：
+   写成对象 `{"assetId":…}` 或键名用 `assetId`，上游一律拒为「请求参数不合法」（code 100001）。
+4. **上报判据事件**：`skill_share_channel_action`，且只认 **`action=wechat` +
+   `panelAction=success`**（`panelAction=click` 实测不计分），`id` 填第 3 步的 `channel_id`。
+
+**实测结果**：两个国服账号（畈子喜欢吃 / 寻）`skill_share` 均从 `0/1` → `1/1 completed`，
+面板自动领奖 **各 +50 分 +5 能**（新二进制实测：`ok=true, credit=50, energy=5, claimed=true`）。
+
+**改动**：
+
+- `internal/upstream/market_skill.go`（新）：`MarketSkillList` / `CreateSkillShareChannel` /
+  `DesktopSkillShareChannelAction`，文件头记录上述实测口径与踩坑。
+- `internal/upstream/device.go`（新）：`RealDeviceIDs()` 读本机客户端真实 `machineId` / `qimei36`，
+  判据事件额外用真实设备指纹再报一份（任务 target=1，重复上报不重复计分）。
+- `internal/upstream/market_skill_test.go`（新）：锁死 `asset_ref` 形态与 `wechat/success` 口径。
+- `internal/panel/skillshare.go`（新）+ `autotask.go` 注册 `skill_share` 自动动作。
+- 扫描待办：国服 `skill_share` 从 manual 桶迁到可自动执行桶（实测扫描 manual_count 9 → 7）。
+
+**剩余人工项**：国际版 5 项 checklist（需在 WorkBuddy 客户端完成，见 v1.15.10-panel 条目）
++ 国服 `wb_wechat_oa_subscribe_task`（需在微信关注公众号并满 24 小时，服务端按真实关注状态判定）。
+
+---
+
 ## 2026-11-17（v1.15.10-panel）
 
 ### 修复：国际版成长路径「上报了但没反应」——事件通道曾被上游静默丢弃

@@ -140,6 +140,11 @@ var autoActions = []autoAction{
 		run:      runExpertLighthouse,
 	},
 	{
+		TaskCode: "skill_share",
+		Desc:     "分享一个技能给好友：accept → 市场真实技能 → 服务端创建分享链接 → skill_share_channel_action 上报（+50c+5e）",
+		run:      runSkillShare,
+	},
+	{
 		TaskCode: "black_cat",
 		Desc:     "夜猫子：23:00–08:00 窗口内 glm-5.2 对话补足（窗口外提示稍后再试）",
 		Attempt:  true,

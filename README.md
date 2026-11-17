@@ -148,9 +148,11 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题，九个视图）：账号池运维 / 签到池 / 用量与积分分析 / 任务中心 / IDE 账号池 / 模型档位条件查询 / 在线改配置（热生效）/ 运行日志（含**调用来源 IP·UA** 与时间区间），见 [Web 管理面板](#-web-管理面板) |
 | 🤖 **Gemini 官方 API Key 通道** | 挂载 Google 官方 API Key，用 `gemini:` 模型前缀直接调用（上游本身 OpenAI 兼容）；密钥分组管理、多 key 轮换、支持出站代理，见 [Google Gemini 官方 API Key 通道](#-google-gemini-官方-api-key-通道) |
 
-## 🎯 成长任务一键完成（17/18，国服口径）
+## 🎯 成长任务一键完成（国服 18 项可自动）
 
 官方「成长计划」的 18 个成长任务中，**17 个可在面板上一键纯 API 完成**——无需安装官方客户端、无需人工交互，点一下「一键完成」即自动推进进度、等待异步计分落定并**自动领奖**。剩余任务展示操作指引。
+
+> 2026-11-17 起，后续版本追加的 `skill_share`（分享一个技能给好友）也已实测可纯 API 完成 ⇒ **当前 18 个任务可自动完成**，仅 2 个需人工（见下表）。
 
 > ⚠️ **口径说明：本节全部为国服（`www.codebuddy.cn` / `www.workbuddy.cn`）实测结论。国际版（`www.workbuddy.ai`）的成长路径是另一套 5 项 checklist，纯 API 点不亮，详见 [🌍 国际版成长路径](#-国际版成长路径需在客户端完成)。**
 
@@ -174,21 +176,34 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | `Hp_Appearance` | +100c +5e | 主题设置 + 皮肤生效事件 |
 | `Expert_lighthouse` | +100c +5e | 轻量云专家召唤+使用链（真实对话 requestId，**可免费领一个月轻量服务器**） |
 | `skill_1` | +100c +5e | 真实对话 + 技能加载事件（skill_info） |
+| `skill_share` | +50c +5e | 市场真实技能 → 服务端创建分享链接 → `skill_share_channel_action`（微信分享成功口径，2026-11-17 两账号实测点亮） |
 | `black_cat` | 随官方成长计划（夜猫子按夜间窗口计数，奖励由上游下发） | 夜猫子：23:00–08:00 窗口内 glm-5.2 真实对话 + chat 事件上报；**窗口外不计分**，面板会提示稍后再试，由网关 `blackcat_hours`（默认 23 点）排程自动补足 |
 
-**表内 16 项合计 ≈ +1950 credits +78 能量**（`black_cat` 的奖励随官方成长计划按夜间窗口下发，未计入该合计）。其中仅数个任务涉及真实对话（`Model_chat_GLM5.2` 一条、`expert_5`/`Expert_team_use_3`/`skill_1` 各数条 fast-model 短对话），其余全部为行为事件上报，零对话消耗。
+**表内 17 项合计 ≈ +2000 credits +83 能量**（`black_cat` 的奖励随官方成长计划按夜间窗口下发，未计入该合计）。其中仅数个任务涉及真实对话（`Model_chat_GLM5.2` 一条、`expert_5`/`Expert_team_use_3`/`skill_1` 各数条 fast-model 短对话），其余全部为行为事件上报，零对话消耗。
 
-### 不可自动的 1 个
+### 不可自动的 2 个
 
 | 任务 | 原因 |
 |---|---|
 | `Expert_Philanthropy` | 需真实捐款（服务端领奖时校验捐赠回执，已实测无法绕过） |
+| `wb_wechat_oa_subscribe_task` | 需在微信里关注「腾讯 WorkBuddy」官方公众号并**满 24 小时**（服务端按真实关注状态判定，无对应行为事件可上报） |
 
 ### 实现原理（简述）
 
 任务计分走 `/v2/report` 行为上报，但**不同任务认不同客户端指纹**：CLI 指纹（`www.codebuddy.cn`）、桌面指纹（`copilot.tencent.com` + `WorkBuddy/5.5.6` UA + `workbuddy-desktop` 事件族）、web 指纹（`www.workbuddy.cn` + `x-client-platform: web`）。网关为每类任务构造对应指纹的判据事件链（`internal/upstream/desktop.go`）；专家类任务额外要求真实专家 id 与真实对话回执（`internal/upstream/streak.go` 之外的 expert 序列）。上报 200 ≠ 计分——面板在执行后轮询任务进度，达标即自动调用 Web 域领奖接口。
 
 > ⚠️ 行为事件按天幂等：重复点「一键完成」不会重复扣资源，已达标的任务自动跳过。
+
+#### `skill_share` 的判据链（2026-11-17 实测）
+
+`skill_share`（「分享一个技能给好友」）此前被归到「需人工」，实测**可以纯 API 完成**，四步缺一不可：
+
+1. **accept 报名** —— 不 accept 时上游 `target=0`，行为事件不计分；accept 后 `target` 变 1；
+2. **取真实市场技能** —— `POST /portal/operation-platform/market/skill/list`（GET 会 404，必须 POST），编造的 `skillId` 不计数；
+3. **服务端创建分享链接** —— `POST /api/v2/open-platform/asset-shares/c2c/channels`，请求体里的 `asset_ref` 必须是 **JSON 字符串**且键名为 `asset_id`（写成对象或 `assetId` 会被上游拒为「请求参数不合法」），成功后拿到 `channel_id`；
+4. **上报判据事件** —— `skill_share_channel_action`，且只认 **`action=wechat` + `panelAction=success`**（`panelAction=click` 实测不计分），`id` 填上一步的 `channel_id`。
+
+实测：两个国服账号 `skill_share` 均从 `0/1` → `1/1 completed`，并自动领奖 **+50 分 +5 能**。
 
 ### 🌍 国际版成长路径（需在客户端完成）
 
