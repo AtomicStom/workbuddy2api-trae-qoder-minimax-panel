@@ -3086,6 +3086,17 @@ const MANUAL_MSG = '需真实操作（关注公众号 / 真实捐款 / 客户端
 const ACTION_TIP = {
   auto: '可自动执行', claim_only: '进度已达标，自动领奖',
   locked_auto: '有自动动作但上游未解锁', manual: '需真实操作',
+  // 国际版成长路径 checklist：面板已按客户端口径上报并持续回读，
+  // 但服务端计分另有判据、纯 API 点不亮 —— 必须回客户端做，做完面板自动核销。
+  client: '需在 WorkBuddy 客户端完成',
+};
+// INTL_CLIENT_HINT 国际版成长路径逐项的客户端操作指引（与后端 upstream.IntlChecklistClientHint 同源）。
+const INTL_CLIENT_HINT = {
+  first_chat: '在 WorkBuddy 客户端里发一次对话（任意内容），完成后回面板刷新',
+  skill_installed: '在 WorkBuddy 客户端的技能市场安装任意一个技能（装完即算）',
+  wechat_linked: '在 WorkBuddy 客户端设置里链接微信账号',
+  expert_summoned: '在 WorkBuddy 客户端召唤任意一个专家并跟它聊一句',
+  template_used: '在 WorkBuddy 客户端用任意一个模板发起任务',
 };
 function qrowHTML(it) {
   const isSchool = it.kind === 'school';
@@ -3102,7 +3113,9 @@ function qrowHTML(it) {
   const msg = status === 'locked'
     ? (lk ? '上游锁定至 ' + lk + '，到点由面板自动执行' : LOCKED_MSG)
     : status === 'manual'
-      ? (it.message || MANUAL_MSG)
+      ? (it.message || (it.action === 'client'
+          ? (INTL_CLIENT_HINT[it.code] || MANUAL_MSG)
+          : MANUAL_MSG))
       : (it.message || '');
   // 队列结果：行内显示 verified 与 progress_before → progress_after。
   let prog = it.prog || '';
@@ -5333,7 +5346,7 @@ async function loadCkWorkBuddy(quiet) {
         '<div class="id" title="' + esc(uid) + '">' + esc(uid || 'UID 未返回') + '</div></div>' +
         '<div class="credits" data-wb-ck-cred="' + esc(uid) + '"><span class="note">查询中…</span></div>' +
         '<div>' + status + '</div>' +
-        '<div>' + btn + '</div>' +
+        '<div class="acts">' + btn + '</div>' +
         '</div>';
     }).join('');
     st.hidden = true;
@@ -5667,7 +5680,7 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
       (!st2
         ? '<span class="note">—</span>'
         : (isDone ? UI.off('已签到', '今日已签到') : UI.act('data-ck-qoder', email, '签到', '今天让这个号先领（池里其余号也会一起打一遍）'))) +
-      UI.sub('data-qd-relogin', email, '重新登录该号', '在 Qoder 客户端里用这个号扫码登录一次（上游没给这个号下发当日活动时的正解）') +
+      UI.sub('data-qd-relogin', email, '重新登录', '在 Qoder 客户端里用这个号扫码登录一次（上游没给这个号下发当日活动时的正解）') +
       UI.sub('data-qd-egress', email, '设备/出口', '设备身份默认＝真实设备（能稳定领到每日额度），这里可手动覆盖 / 配出口代理') +
       UI.sub('data-qd-history', email, '历史', '查看最近 7 天领取历史') +
       '</div>' +

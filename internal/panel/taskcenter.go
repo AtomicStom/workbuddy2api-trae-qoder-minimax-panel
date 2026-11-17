@@ -51,6 +51,12 @@ const (
 	scanActionClaimOnly  = "claim_only"  // 已达标，无需动作，直接领奖
 	scanActionLockedAuto = "locked_auto" // 有自动动作但上游锁定
 	scanActionManual     = "manual"      // 面板无自动动作，需真实操作
+	// scanActionClient 需在官方客户端完成（国际版成长路径 checklist）。
+	//
+	// 与 scanActionManual 的区别：面板**有**上报动作（按客户端口径）且会回读，
+	// 但服务端计分另有判据、纯 API 点不亮，所以既不能标 auto（虚假承诺），
+	// 也不能混进 manual（面板其实已经在做了）。前端据此外键渲染客户端操作指引。
+	scanActionClient = "client"
 )
 
 // errors[].scope：标识错误来源口径（R3.2.1「账号、口径、真实错误」）。
@@ -168,7 +174,11 @@ func scanActionFor(t upstream.Task) string {
 	if t.Target > 0 && t.Current >= t.Target {
 		return scanActionClaimOnly
 	}
-	if autoActionFor(t.TaskCode) != nil {
+	if act := autoActionFor(t.TaskCode); act != nil {
+		if act.ClientOnly {
+			// 国际版成长路径：面板按客户端口径上报，但不承诺完成 → 独立分类。
+			return scanActionClient
+		}
 		return scanActionAuto
 	}
 	return scanActionManual
@@ -457,7 +467,22 @@ func (p *Panel) buildGrowthQueue(growth bool) growthQueuePlan {
 				// 清单不可信：不入队，错误已在 errors[] 中如实上报。
 				return
 			}
-			if !growth || len(it.Growth) == 0 {
+			if !growth {
+				return
+			}
+			// 入队集合 = Growth 桶（auto + claim_only）**加上**国际版 checklist（client 分类）。
+			//
+			// 国际版 checklist 落在 Manual 桶（面板不承诺自动完成），但仍入队执行：
+			// 面板会按客户端口径上报并回读，上游一旦放开计分即刻自动点亮；
+			// 未点亮时结果行如实写明「已上报未计分 + 需在客户端完成」。
+			queued := make([]scanTask, 0, len(it.Growth)+len(it.Manual))
+			queued = append(queued, it.Growth...)
+			for _, e := range it.Manual {
+				if e.Action == scanActionClient {
+					queued = append(queued, e)
+				}
+			}
+			if len(queued) == 0 {
 				return
 			}
 			a := p.cfg.Pool.AuthByUID(states[i].UID)
@@ -465,11 +490,11 @@ func (p *Panel) buildGrowthQueue(growth bool) growthQueuePlan {
 				return
 			}
 			// 按 autoActions 表序执行（依赖先行）；claim_only 无动作，排在表后。
-			sort.SliceStable(it.Growth, func(x, y int) bool {
-				return autoActionIndex(it.Growth[x].TaskCode) < autoActionIndex(it.Growth[y].TaskCode)
+			sort.SliceStable(queued, func(x, y int) bool {
+				return autoActionIndex(queued[x].TaskCode) < autoActionIndex(queued[y].TaskCode)
 			})
-			acc := &queueAccount{a: a, grow: make([]upstream.Task, 0, len(it.Growth))}
-			for _, st := range it.Growth {
+			acc := &queueAccount{a: a, grow: make([]upstream.Task, 0, len(queued))}
+			for _, st := range queued {
 				acc.grow = append(acc.grow, st.Task)
 			}
 			rows[i].acct = acc

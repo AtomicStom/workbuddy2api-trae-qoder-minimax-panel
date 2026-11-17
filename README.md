@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>一个面板，统管 WorkBuddy / CodeBuddy / Trae / Qoder / MiniMax / 豆包 / 华为云 CodeArts / Google Gemini 全部账号 → 统一 OpenAI 兼容网关</b><br>
-  Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（17/18）</b> · 流式 / 非流式
+  Web 面板 · OAuth 浏览器登录 · 账号池轮转 · 熔断与冷却 · 会话粘性 · 定时签到 / 活跃 / 旅行 / 保活 · <b>成长任务一键完成（国服 17/18）</b> · 流式 / 非流式
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@
 > | 平台 | 接入形态 | 面板能力 |
 > |---|---|---|
 > | **CodeBuddy / WorkBuddy 国内版** | 主号池（`auths/*.json`） | 聊天网关、签到、余额、成长任务一键完成、模型与档位 |
-> | **WorkBuddy 国际版** | 主号池（`realm=global`） | 同上（国际版无签到 / 成长体系） |
+> | **WorkBuddy 国际版** | 主号池（`realm=global`） | 同上（国际版无签到；成长路径为 5 项 checklist，需在 WorkBuddy 客户端完成，见 [🌍 国际版成长路径](#-国际版成长路径需在客户端完成)） |
 > | **Trae** | IDE 账号池 | 账号管理、切号、签到、积分、客户端提取令牌 |
 > | **Qoder** | IDE 账号池 | 账号管理、切号、签到（**每日额度按账号各发一份**，服务端判同人才只发一份）、积分、凭证自动续期 |
 > | **MiniMax Code** | 账号池 | **浏览器登录**（OAuth 设备码 + S256 PKCE，无需本机客户端）、签到、积分、**凭证自动续期**（1h token / 轮换 RT 双向同步客户端）、模型通道（`minimax:` 前缀） |
@@ -148,9 +148,11 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 🖥️ **Web 管理面板** | 内嵌单页面板（明暗主题，九个视图）：账号池运维 / 签到池 / 用量与积分分析 / 任务中心 / IDE 账号池 / 模型档位条件查询 / 在线改配置（热生效）/ 运行日志（含**调用来源 IP·UA** 与时间区间），见 [Web 管理面板](#-web-管理面板) |
 | 🤖 **Gemini 官方 API Key 通道** | 挂载 Google 官方 API Key，用 `gemini:` 模型前缀直接调用（上游本身 OpenAI 兼容）；密钥分组管理、多 key 轮换、支持出站代理，见 [Google Gemini 官方 API Key 通道](#-google-gemini-官方-api-key-通道) |
 
-## 🎯 成长任务一键完成（17/18）
+## 🎯 成长任务一键完成（17/18，国服口径）
 
 官方「成长计划」的 18 个成长任务中，**17 个可在面板上一键纯 API 完成**——无需安装官方客户端、无需人工交互，点一下「一键完成」即自动推进进度、等待异步计分落定并**自动领奖**。剩余任务展示操作指引。
+
+> ⚠️ **口径说明：本节全部为国服（`www.codebuddy.cn` / `www.workbuddy.cn`）实测结论。国际版（`www.workbuddy.ai`）的成长路径是另一套 5 项 checklist，纯 API 点不亮，详见 [🌍 国际版成长路径](#-国际版成长路径需在客户端完成)。**
 
 ### 任务覆盖与奖励
 
@@ -188,11 +190,45 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 
 > ⚠️ 行为事件按天幂等：重复点「一键完成」不会重复扣资源，已达标的任务自动跳过。
 
+### 🌍 国际版成长路径（需在客户端完成）
+
+国际版（`www.workbuddy.ai`，账号 realm = `global`）不走上面这套 18 项成长计划，而是一份**独立的 5 项 checklist**，只读端点只有两个：
+
+| 端点 | 用途 |
+|---|---|
+| `GET /v2/activity/growth/tasks` | 拉 5 项 checklist 状态 |
+| `GET /v2/activity/growth/profile` | 回读 `completed / total / level / first_visit` |
+
+| checklist 任务码 | 面板分类 | 说明 |
+|---|---|---|
+| `first_chat` | `client` | 发一次真实对话（`/v2/chat/completions` 或 `/console/chat/completions`），并按客户端口径上报 `chat_response_complete` |
+| `skill_installed` | `client` | 安装一个技能（国际版**无对外技能列表接口**，面板取不到真实 `skillId`，只按最小口径上报并如实说明） |
+| `expert_summoned` | `client` | 召唤一次专家（真实专家列表 `POST /portal/operation-platform/market/expert/list` 可用，面板会取真实专家 id 上报） |
+| `template_used` | `client` | 用一次模板（国际版**无对外模板列表接口**，面板取不到真实 `template_id`，只按最小口径上报并如实说明） |
+| `wechat_linked` | `manual` | 链接微信，纯人工 |
+
+**面板行为（v1.15.10-panel 起）**：
+
+- 扫描到国际版这 4 项时**不再标成「可自动完成」**，而是标为 **`client`（需在 WorkBuddy 客户端完成）**，并在待办行内直接给出逐项客户端操作指引；
+- 但它们**仍然进入执行队列**——面板会按 WorkBuddy 客户端的真实事件口径（任务码即 `eventCode` + 真实业务字段 + 真实设备指纹 + `reportDelay`/`timestamp`）把事件上报一遍，再回读 `profile`；**上游一旦放开计分即自动点亮**；
+- 回读没点亮的一律记为 **`unverified`（未核销）**，绝不谎报「已完成」。执行结果文案会明说「上游返回成功但成长路径仍不计分，请到客户端完成该操作，完成后回面板刷新即可自动核销」。
+
+> ⚠️ **实测更正（推翻 2026-10-15 的旧结论）**：旧结论写的是「国际版成长任务已支持一键完成」。这个结论是错的——当时面板上报的 `DesktopChatSequence` 事件序列**缺 `reportDelay` 与 `timestamp`**，而国际版 `/v2/report` 端点对缺这两个字段的事件直接 **400 丢弃**：
+>
+> ```json
+> {"code":10001,"msg":"10001:event missing both reportDelay and timestamp fields"}
+> ```
+>
+> 也就是说旧版所谓的「上报成功」其实是**从未被服务端接收**（国服端点宽容，所以旧版只在国服实测过就下了结论）。补齐 `reportDelay`/`timestamp` 后上游返回 `HTTP 200 {"code":0,"msg":"OK"}`，但 5 项 checklist **仍不计分**——穷尽实测（仅事件链 / 真实对话 + 事件链 / 两域真实对话 / 裸 eventCode / 带真实专家 id / `chat_response_complete` 双通道）均返回 200 仍不亮，判定为**服务端对国际版 checklist 另有计分判据**，纯 API 点不亮。
+>
+> 结论：**国际版 checklist 必须由用户在 WorkBuddy AI 国际版客户端（`C:\Program Files\WorkBuddy-AI\WorkBuddyAI.exe`）真实操作一次**（发一次对话 / 装一个技能 / 召唤一次专家 / 用一个模板 / 链接微信），完成后回面板刷新即自动核销。
+
 ### 🧭 任务中心（面板新视图）
 
 「任务中心」视图把散落的任务能力收拢成一处：
 
 - **全账号任务扫描**：一键拉取每个账号的成长任务（未完成且可自动化的 19 项，含小程序口径的「校园日」与「小程序首对话」），列表一目了然
+- **三类待办分区**：`auto`（可纯 API 完成）、`client`（**需在 WorkBuddy 客户端完成**，国际版 checklist 走这一类，行内直接给操作指引）、`manual`（纯人工，如关注公众号 / 链接微信）；`client` 与 `auto` 都会进执行队列，未核销的一律显示「未核销」而非「已完成」
 - **执行队列**：把待办按账号排队执行——账号内串行（与单任务/一键完成共用互斥锁），账号间可选并发（1-3）；执行进度实时更新到每个条目
 - **开学季券码查询**：任务中心提供开学季券码查询入口（`GET /panel/api/school/vouchers`）。⚠️ 开学季的**自动化**部分（分享 / 抽奖 / 5 任务状态矩阵）**尚未实现**——`share-complete`、`wheel/draw` 等端点在当前代码中不存在，活动（期至 2026-09-24）也已结束
 - **日志分频道**：运行日志按「任务 / 对话 / 系统」三个频道筛选——对话流量再大，任务结果也不会被冲掉；日志条目带频道徽标与时间

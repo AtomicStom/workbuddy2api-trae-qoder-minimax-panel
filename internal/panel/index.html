@@ -155,6 +155,8 @@ body {
 .trow .credits { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .trow .err { grid-column: 1 / -1; font-size: 12px; color: var(--bad); margin-top: -4px; }
 .thead { display: grid; grid-template-columns: var(--ck-cols); gap: 14px; padding: 8px 16px; font-size: 11.5px; color: var(--ink-3); border-bottom: 1px solid var(--line-soft); }
+.thead > div:last-child { text-align: right; }
+.trow .acts { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
 /* 积分总览四张表统一列宽（账号 | 积分余额 | 签到可得），保证四块竖线对齐 */
 .acc.ckfix { table-layout: fixed; }
 .acc.ckfix th:nth-child(1), .acc.ckfix td:nth-child(1) { width: 46%; }
@@ -762,7 +764,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <circle cx="35" cy="33" r="8"/><path d="m40 38 5 5"/>
           </svg>
           <div class="t">还没有扫描过</div>
-          <div class="d">扫描所有账号的成长任务与开学季待办，把没做的排成一列，一键执行。</div>
+          <div class="d">扫描所有账号的成长任务待办，一键自动化批量执行。</div>
         </div>
         <div id="qcList"></div>
       </div>
@@ -1288,7 +1290,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <div class="hr"></div>
             <div class="switch"><span class="lb">保号任务覆盖已禁用账号</span>
               <input type="checkbox" name="include_disabled_in_tasks"></div>
-            <div class="hint">禁用只关选号：打开后已禁用的账号仍会签到 / 活跃上报 / 保活 / 刷新余额（依旧不参与选号）。适合「一次只放开一个账号、用禁用做流量开关」的轮换养号用法，默认关闭。<br>若只想让<b>单个</b>账号临时退出选号但保留保号，直接用账号行的「<b>暂停选号</b>」按钮（账号级，无需打开本开关）。</div>
+            <div class="hint">开启后已禁用账号仍参与签到、保活与刷新余额（不参与对话选号）。若仅临时暂停单个账号选号，可使用账号行的「暂停选号」。</div>
           </div>
         </div>
 
@@ -1525,7 +1527,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   <div class="dlg" style="width:660px">
     <header>
       <h3>Qoder 设备 / 出口</h3>
-      <div class="hint">默认自动：号池里第一个号用真实设备，其余号按邮箱派生 —— 同一台机器上的多个号不会共用同一套设备指纹。手动指定会覆盖自动分配。</div>
+      <div class="hint">为不同账号配置独立的设备模式与网络出口代理。</div>
     </header>
     <div class="body">
       <div id="qdEgressBody"></div>
@@ -1541,7 +1543,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <option value="real">real（真实设备）</option>
           <option value="derived">derived（邮箱派生，实测可能领不到额度）</option>
         </select>
-        <span class="hint">auto = 真实设备（默认，能稳定领到每日额度）。实测：派生身份会被上游按设备维度过滤、领不到额度，只有确实要隔离设备指纹时才手动选 derived。</span>
+        <span class="hint">默认 auto 保持稳定额度；仅在需强制隔离设备指纹时选择 derived。</span>
       </label>
       <label class="fld"><span class="lb">出口代理（proxy_url，可空）</span>
         <input type="text" id="qdEgressProxy" placeholder="http://127.0.0.1:1080">
@@ -1633,7 +1635,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <!-- Trae 登录（trae.cn，与 WorkBuddy 是两套独立账号体系） -->
       <div id="addTabTrae" class="tab-panel" hidden>
         <div class="state" style="margin-bottom:8px">
-          点「打开登录窗口」后，面板会拉起一个<b>独立浏览器窗口</b>（每次全新会话），登录要添加的 Trae 账号即可。
+          点击下方按钮打开独立会话窗口，登录 Trae 账号后将自动识别收录。
         </div>
         <div id="addTraeLoad" class="state" hidden><span class="dots">正在启动浏览器</span></div>
         <div id="addTraeReady" hidden>
@@ -1659,7 +1661,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
         <label class="hint" style="margin-top:10px;display:flex;gap:6px;align-items:flex-start;cursor:pointer">
           <input type="checkbox" id="chkQoderLogout" style="margin-top:2px">
-          <span>「客户端浏览器登录」时勾选这一项：先退出当前账号再登录另一个号。服务端在**登录时**给账号发"这个人"的身份（scope），面板直接写登录态不会重新签发，两个号就会被算成同一个人、每天只能领一份 100 积分。</span>
+          <span>登录前退出当前客户端账号（推荐勾选，避免多账号被上游合并为同一用户作用域导致额度冲突）。</span>
         </label>
         <div id="addQoderWebBox" hidden style="margin-top:10px">
           <div class="state"><span class="dots" id="addQoderWebState">已打开浏览器（这个账号的独立会话），请登录要添加的 Qoder 账号…</span></div>
@@ -1670,8 +1672,8 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <div id="addQoderLoginErr" class="state err" hidden style="margin-top:8px"></div>
         </div>
         <div class="hint" style="margin-top:10px">
-          <b>网页登录</b>：每个号一个独立浏览器会话（profile 存在本机），你在浏览器里登录一次即可，之后每天由面板用这份会话自动领取每日 100 积分 —— <b>不需要再登客户端，也不需要每次登网页</b>。<br>
-          <b>客户端浏览器登录</b>：启动 Qoder 客户端，在客户端里用浏览器/扫码完成鉴权，面板自动收录这个号。
+          <b>网页登录</b>：独立浏览器会话，登录一次后每日自动签到，免重复登录。<br>
+          <b>客户端登录</b>：启动客户端完成扫码授权，面板自动收录。
         </div>
       </div>
       <!-- MiniMax：浏览器登录（设备码）/ 捕获客户端登录态 / 粘贴 access+refresh token -->
@@ -1697,8 +1699,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <label class="realm-opt"><input type="radio" name="mmRealm" value="global"> 国际版（Global）</label>
           </div>
           <div class="hint" style="margin-bottom:8px">
-            浏览器登录：点按钮拿到验证码与授权链接，在浏览器里登录要添加的 MiniMax 账号，授权完自动入池并签到。
-            授权窗口只有 5 分钟，超时了点按钮重发。
+            点击获取授权链接与设备码，在浏览器中完成授权即可自动入池（授权窗口有效期 5 分钟）。
           </div>
           <button id="btnMmLogin" class="primary">浏览器登录添加账号</button>
           <div id="addMmLoginBox" hidden style="margin-top:10px">
@@ -1715,7 +1716,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       </div>
       <!-- 豆包：浏览器登录（自拉浏览器） / 客户端登录+提取 / 手动粘贴 Cookie -->
       <div id="addTabDoubao" class="tab-panel" hidden>
-        <div class="state" id="addDbCur" style="margin-bottom:8px">豆包签到用的就是网页 Cookie（sessionid / ttwid / msToken），所以两种加号方式拿到的是同一批凭据：<b>浏览器登录</b>（面板自拉一个干净浏览器窗口，你在网页版登录）或 <b>客户端登录</b>（拉起豆包客户端登录，再提取它的 Cookie）。</div>
+        <div class="state" id="addDbCur" style="margin-bottom:8px">支持通过内置独立浏览器登录、从客户端提取凭据，或手动填入 Cookie。</div>
         <div id="addDbDone" class="state ok" hidden></div>
         <div id="addDbErr" class="state err" hidden></div>
         <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
@@ -1739,7 +1740,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <!-- 华为云 CodeArts（码道）：浏览器登录，每个号一份独立浏览器会话 -->
       <div id="addTabCodearts" class="tab-panel" hidden>
         <div class="state" style="margin-bottom:8px">
-          华为云网页登录态<b>只有约一小时寿命</b>，所以面板不用 Cookie 快照，而是给每个号留一份<b>独立的浏览器会话</b>：你在弹出的窗口里登录一次，这份会话就存在本机，之后每天由面板用它自动点「活动福利 → 每日领取」。
+          通过独立浏览器会话登录华为云账号，会话在本机隔离保存，用于每日自动签到。
         </div>
         <div id="addCaDone" class="state ok" hidden></div>
         <div id="addCaErr" class="state err" hidden></div>
@@ -1749,7 +1750,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
         <div id="addCaState" class="state" hidden style="margin-top:10px"><span class="dots">等待登录…</span></div>
         <div class="hint" style="margin-top:10px">
-          要加第二个华为云账号，就再点一次「打开登录窗口」——每次都会用一份全新的浏览器会话，不会和上一个号串号。
+          添加多个账号请依次点击「打开登录窗口」，每个账号自动分配独立隔离会话。
         </div>
       </div>
       <!-- 导入 JSON -->

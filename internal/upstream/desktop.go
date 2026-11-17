@@ -40,6 +40,7 @@ import (
 
 const (
 	desktopReportPath    = "/v2/report"
+	desktopModelReport   = "/llm/data/report" // 模型事件通道（国际版客户端双通道之一）
 	desktopAppearanceSet = "/v2/user-asset/appearance/set"
 	// desktopUA 实测桌面客户端 UA（5.5.6 内嵌 CLI 2.137.1）。
 	desktopUA = "WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1"
@@ -59,11 +60,27 @@ func deriveID(a *auth.Auth, salt string) string {
 type DesktopEvent map[string]any
 
 // desktopFingerprint 公共桌面指纹字段（注入每个事件，覆盖同名业务键）。
+//
+// ⚠️ 2026-11-17 实测更正（国际版 workbuddy.ai）：事件**必须**同时带
+// reportDelay 与 timestamp，否则上游直接 400 丢弃：
+//
+//	{"code":10001,"msg":"10001:event missing both reportDelay and timestamp fields"}
+//
+// 国服（codebuddy.cn）对此宽容（缺了也照收），所以旧版本只在国服实测过，
+// 国际版所有上报都被静默丢弃 —— 这正是「国际版成长路径点了没反应」的直接原因之一。
+// 客户端语义（asar 实测 StandardEventService.report）：
+//
+//	r = {eventCode, timestamp: Date.now(), reportDelay: 0, ...业务字段}
+//	prepareEvents: reportDelay = Date.now() - timestamp
+//
+// 即 reportDelay = 「上报时刻 - 事件发生时刻」，当场立即上报即为 0。
 func desktopFingerprint(a *auth.Auth) map[string]any {
 	now := time.Now().UnixMilli()
 	return map[string]any{
 		"timezone":     "Asia/Shanghai",
-		"reportDelay":  2000,
+		"reportDelay":  0,
+		"timestamp":    now,
+		"presentAt":    now,
 		"userId":       a.UID,
 		"username":     a.Nickname,
 		"userNickname": a.Nickname,
@@ -82,8 +99,6 @@ func desktopFingerprint(a *auth.Auth) map[string]any {
 		"osVersion":    "10.0.26220",
 		"cpuCores":     20,
 		"memorySize":   24,
-		"timestamp":    now,
-		"presentAt":    now,
 	}
 }
 
@@ -91,6 +106,42 @@ func desktopFingerprint(a *auth.Auth) map[string]any {
 // events 为业务载荷（eventCode 等字段由调用方给出）；公共指纹自动注入，
 // 业务字段优先（可用于覆盖 qimei36/machineId 等设备标识做真实设备对齐）。
 func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error {
+	return c.reportDesktopEventTo(a, desktopReportPath, events...)
+}
+
+// ReportDesktopEventAll 同 ReportDesktopEvent，但**国际版（realm=global）额外打
+// 模型事件通道 /llm/data/report**（国际版客户端实测双通道：StandardEventService
+// → /v2/report，ModelEventService → /llm/data/report；两条通道返回体不同：
+// 前者 msg=OK，后者 msg=success）。
+//
+// 为什么不无条件双投：国服（codebuddy.cn）没有 /llm/data/report，硬打会得到 404
+// 噪音；故按 realm 分流，global 才走双通道。
+func (c *Client) ReportDesktopEventAll(a *auth.Auth, events ...DesktopEvent) error {
+	ok := 0
+	var firstErr error
+	if err := c.reportDesktopEventTo(a, desktopReportPath, events...); err != nil {
+		firstErr = err
+	} else {
+		ok++
+	}
+	if c.globalOn(a) {
+		if err := c.reportDesktopEventTo(a, desktopModelReport, events...); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			ok++
+		}
+	}
+	// 只要有一条通道送达即算事件已送到上游（两条通道任一可用都可能被计分）。
+	if ok == 0 && firstErr != nil {
+		return firstErr
+	}
+	return nil
+}
+
+// reportDesktopEventTo 向指定 report 路径批量上报桌面指纹事件。
+func (c *Client) reportDesktopEventTo(a *auth.Auth, path string, events ...DesktopEvent) error {
 	if len(events) == 0 {
 		return fmt.Errorf("desktop report: no events")
 	}
@@ -110,7 +161,7 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.desktopBase(a)+desktopReportPath, bytes.NewReader(raw))
+	req, err := http.NewRequest(http.MethodPost, c.desktopBase(a)+path, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -441,11 +492,19 @@ func (c *Client) marketExpertQuery(a *auth.Auth, body map[string]any) ([]MarketE
 // （客户端 resolveRealRequestId 同款语义，Sunny row 2113 实证）。
 func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversationID, requestID string, err error) {
 	conversationID = desktopUUID()
+	model := "fast-model"
+	sysPrompt := "You are a helpful assistant. 当前处于中文环境，使用简体中文回答。"
+	userPrompt := "帮我用一句话描述今天的天气适合做什么，随意发挥就行。"
+	if a != nil && a.IsGlobal() {
+		model = "default-model"
+		sysPrompt = "You are a helpful assistant."
+		userPrompt = "hello, reply in one sentence."
+	}
 	body := map[string]any{
-		"model": "fast-model",
+		"model": model,
 		"messages": []any{
-			map[string]any{"role": "system", "content": "You are a helpful assistant. 当前处于中文环境，使用简体中文回答。"},
-			map[string]any{"role": "user", "content": "帮我用一句话描述今天的天气适合做什么，随意发挥就行。"},
+			map[string]any{"role": "system", "content": sysPrompt},
+			map[string]any{"role": "user", "content": userPrompt},
 		},
 		"agent":          "craft",
 		"temperature":    1,
@@ -460,24 +519,20 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	if err != nil {
 		return "", "", err
 	}
-	h := req.Header
-	h.Set("Authorization", "Bearer "+a.AccessTokenValue())
-	h.Set("Content-Type", "application/json")
-	h.Set("Accept", "text/event-stream")
-	h.Set("User-Agent", desktopUA)
-	h.Set("X-Domain", c.chatBase(a))
-	h.Set("X-Product", "SaaS")
-	h.Set("X-User-Id", a.UID)
-	h.Set("X-Conversation-ID", conversationID)
-	h.Set("X-Request-ID", desktopUUID())
-	h.Set("X-Agent-Intent", "craft")
-	h.Set("X-Agent-Type", "main")
-	h.Set("X-IDE-Name", "WorkBuddy")
-	h.Set("X-IDE-Type", "WorkBuddy")
-	h.Set("X-IDE-Version", "5.5.6")
-	h.Set("x-codebuddy-request", "1")
+	meta := ChatMeta{
+		ConversationID:        conversationID,
+		ConversationRequestID: desktopUUID(),
+		TraceID:               desktopUUID(),
+	}
+	c.ChatHeaders(req, a, "", meta)
+	req.Header.Set("X-Agent-Intent", "craft")
+	req.Header.Set("X-Agent-Type", "main")
+	req.Header.Set("X-IDE-Name", "WorkBuddy")
+	req.Header.Set("X-IDE-Type", "WorkBuddy")
+	req.Header.Set("X-IDE-Version", c.clientVersion())
+	req.Header.Set("x-codebuddy-request", "1")
 	if expertID != "" {
-		h.Set("X-Expert-Id", expertID)
+		req.Header.Set("X-Expert-Id", expertID)
 	}
 	if os.Getenv("WB2A_DEBUG_CHAT") != "" {
 		fmt.Printf("[dbg] URL=%s\n", req.URL)

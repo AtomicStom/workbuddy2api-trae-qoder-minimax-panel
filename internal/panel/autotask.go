@@ -46,7 +46,14 @@ type autoAction struct {
 	TaskCode string // 目标任务 code
 	Desc     string // 展示用说明
 	Attempt  bool   // true = 尝试型（上游未证实可脚本化，跑了可能不点亮）
-	run      func(p *Panel, a *auth.Auth) (string, error)
+	// ClientOnly 标记「必须在官方客户端完成」的动作（国际版成长路径 checklist）。
+	//
+	// 语义（2026-11-17 实测）：这类任务面板**不做完成承诺**——面板按客户端口径
+	// 上报事件（上游返回成功），但服务端计分另有判据，实测纯 API 点不亮。
+	// 因此扫描结果里归入「需在客户端完成」分类并逐项给出操作指引，用户在客户端
+	// 做完后面板回读自动核销。禁止把它们标成「可自动执行」——那是虚假承诺。
+	ClientOnly bool
+	run        func(p *Panel, a *auth.Auth) (string, error)
 }
 
 // autoActions 已实现的任务动作表（顺序即执行顺序：先解锁依赖项）。
@@ -179,31 +186,44 @@ var autoActions = []autoAction{
 		run:      runSequentialPlaybook,
 	},
 	// —— WorkBuddy 国际版「成长路径」checklist 口径（workbuddy.ai）——
-	// 这 5 项以 checklist 形态下发（level_name 非空），复用已有桌面指纹事件链；
-	// Attempt=true：判据来自国内口径实测，国际版是否同样点亮未经证实。
+	// 这 5 项以 checklist 形态下发（level_name 非空）。
+	//
+	// ⚠️ 2026-11-17 实测（推翻 10-15 旧结论）：
+	//   旧结论说「4 项动作均上报成功但进度未变化」——**当时的上报根本没被上游接收**：
+	//   国际版 report 端点缺 reportDelay/timestamp 直接 400 丢弃（10001）。
+	//   该坑已修（upstream.desktopFingerprint 补齐两字段）+ 事件口径改为客户端原样
+	//   （任务码即 eventCode + 真实业务字段 + 双通道 /v2/report 与 /llm/data/report）。
+	//   修通后实测：两条通道均返回成功，但 status 仍 available、profile completed=0/5
+	//   —— 服务端计分另有判据，纯 API 点不亮。
+	//   故：这 5 项标 ClientOnly（面板不承诺完成），逐项给客户端操作指引，
+	//   用户在客户端做完后面板回读核销。
 	{
-		TaskCode: "first_chat",
-		Desc:     "国际版成长路径·完成一次对话（复用桌面对话事件链，尝试型）",
-		Attempt:  true,
-		run:      runRichMeow,
+		TaskCode:   "first_chat",
+		Desc:       "国际版成长路径·完成一次对话（客户端口径上报 chat_response_complete；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
+		Attempt:    true,
+		ClientOnly: true,
+		run:        runIntlFirstChat,
 	},
 	{
-		TaskCode: "template_used",
-		Desc:     "国际版成长路径·使用一次模板（复用模板使用事件组，尝试型）",
-		Attempt:  true,
-		run:      runTemplateUse,
+		TaskCode:   "template_used",
+		Desc:       "国际版成长路径·使用一次模板（客户端口径上报 template_used；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
+		Attempt:    true,
+		ClientOnly: true,
+		run:        runIntlTemplateUsed,
 	},
 	{
-		TaskCode: "expert_summoned",
-		Desc:     "国际版成长路径·召唤一次专家（复用专家召唤+真实使用链，尝试型）",
-		Attempt:  true,
-		run:      runExpertUse,
+		TaskCode:   "expert_summoned",
+		Desc:       "国际版成长路径·召唤一次专家（取真实市场专家 id 后按客户端口径上报 expert_summoned；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
+		Attempt:    true,
+		ClientOnly: true,
+		run:        runIntlExpertSummoned,
 	},
 	{
-		TaskCode: "skill_installed",
-		Desc:     "国际版成长路径·完成技能安装（复用技能加载事件链，尝试型）",
-		Attempt:  true,
-		run:      runSkillFresh,
+		TaskCode:   "skill_installed",
+		Desc:       "国际版成长路径·完成技能安装（客户端口径上报 skill_installed；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
+		Attempt:    true,
+		ClientOnly: true,
+		run:        runIntlSkillInstalled,
 	},
 }
 
@@ -1703,7 +1723,13 @@ func buildAutoPlan(snapshot []upstream.Task, actions []autoAction, actionFor fun
 			item.claimOnly = true
 			claims = append(claims, item)
 		case act != nil:
-			item.action = "auto"
+			if act.ClientOnly {
+				// 国际版成长路径：仍执行（按客户端口径上报 + 回读核销），
+				// 但对外展示为「需在客户端完成」，不承诺能自动点亮。
+				item.action = "client"
+			} else {
+				item.action = "auto"
+			}
 			autos = append(autos, item)
 		default:
 			item.action = "manual"

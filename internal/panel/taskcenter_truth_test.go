@@ -341,8 +341,28 @@ func TestTaskCenterScanBucketsInvariant(t *testing.T) {
 	if !global.Global || global.ScanState != scanStateOK {
 		t.Errorf("a-global global=%v state=%q want true/ok", global.Global, global.ScanState)
 	}
-	if len(global.Growth) != 2 {
-		t.Errorf("a-global growth=%d want 2（国际版 checklist 必须可见）", len(global.Growth))
+	// ⚠️ 2026-11-17 实测更正：国际版 checklist **不再**落「可自动执行」桶。
+	//
+	// 旧断言（原文保留）：国际版 2 项必须出现在 Growth（auto）桶 ——
+	//
+	//	if len(global.Growth) != 2 {
+	//		t.Errorf("a-global growth=%d want 2（国际版 checklist 必须可见）", len(global.Growth))
+	//	}
+	//
+	// 作废原因：国际版 checklist 的服务端计分判据与国服不同，纯 API 上报实测点不亮
+	// （两条上报通道均返回成功，但 status 仍 available、profile completed=0/5）；
+	// 继续标成 auto 等于对用户做虚假承诺。现分类为 client（需在 WorkBuddy 客户端
+	// 完成，面板回读自动核销），落在 Manual 桶但带 client 标记。
+	if len(global.Growth) != 0 {
+		t.Errorf("a-global growth=%d want 0（国际版 checklist 不再是可自动执行项）", len(global.Growth))
+	}
+	if len(global.Manual) != 2 {
+		t.Errorf("a-global manual=%d want 2（国际版 checklist 需在客户端完成）", len(global.Manual))
+	}
+	for _, e := range global.Manual {
+		if e.Action != scanActionClient {
+			t.Errorf("a-global manual 项 %s action=%q want client", e.TaskCode, e.Action)
+		}
 	}
 
 	if byUID["a-ent"].ScanState != scanStateSkippedEnterprise {
@@ -362,8 +382,11 @@ func TestTaskCenterScanBucketsInvariant(t *testing.T) {
 	if resp.LockedCount != 1 {
 		t.Errorf("locked_count=%d want 1", resp.LockedCount)
 	}
-	if resp.ManualCount != 2 {
-		t.Errorf("manual_count=%d want 2", resp.ManualCount)
+	// ⚠️ 2026-11-17 更正：manual 桶现在也装国际版 checklist（client 分类），
+	// 所以 manual_count 由 2 变 4（a-ok 的 1 项 + a-lock 的 1 项 + a-global 的 2 项）。
+	// 旧断言（原文保留）：`if resp.ManualCount != 2 { ... want 2 }`。
+	if resp.ManualCount != 4 {
+		t.Errorf("manual_count=%d want 4（含国际版 checklist 的 client 分类项）", resp.ManualCount)
 	}
 	if resp.IncompleteTotal != resp.PendingCount+resp.LockedCount+resp.ManualCount {
 		t.Errorf("incomplete_total=%d != pending+locked+manual=%d",
@@ -417,8 +440,12 @@ func TestTaskCenterQueueIncludesGlobal(t *testing.T) {
 		if it.Source != queueSourceGlobal {
 			t.Errorf("条目 %s source=%q want global", it.Code, it.Source)
 		}
-		if it.Action != scanActionAuto {
-			t.Errorf("条目 %s action=%q want auto", it.Code, it.Action)
+		// ⚠️ 2026-11-17 更正：国际版 checklist 的 action 不再是 auto —— 旧断言
+		//（原文保留）：`if it.Action != scanActionAuto { ... want auto }`。
+		// 现分类为 client：面板按客户端口径上报并回读，但不承诺能自动点亮
+		// （服务端计分另有判据，实测纯 API 点不亮）。
+		if it.Action != scanActionClient {
+			t.Errorf("条目 %s action=%q want client", it.Code, it.Action)
 		}
 		if it.Status != queueStatusPending {
 			t.Errorf("条目 %s status=%q want pending", it.Code, it.Status)

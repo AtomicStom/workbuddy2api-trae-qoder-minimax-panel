@@ -1,5 +1,52 @@
 # 变更日志
 
+## 2026-11-17（v1.15.10-panel）
+
+### 修复：国际版成长路径「上报了但没反应」——事件通道曾被上游静默丢弃
+
+**旧结论（2026-10-15，原文保留）**：「WorkBuddy 国际版：4 项动作均上报成功（`status=done`），
+但任务进度未变化，仍未点亮。国际版 checklist 与国内口径判据不同，网关代做不了。」
+
+**⚠️ 2026-11-17 实测更正（推翻上面结论里的「上报成功」前提）**：
+
+- 旧结论把「HTTP 200」当成了「事件被上游接收」，但**国际版 report 端点对事件有强校验**：
+  缺 `reportDelay` 或 `timestamp` 直接 **400 丢弃**：
+  `{"code":10001,"msg":"10001:event missing both reportDelay and timestamp fields"}`。
+  面板的桌面对话事件链（5.5.6 schema）恰好两个字段都没有 —— 所谓「上报成功」其实是
+  **从未被接收**。国服（codebuddy.cn）对此宽容，所以旧版本只在国服实测过，国际版全被丢弃。
+- 已修：`upstream.desktopFingerprint` 补齐 `reportDelay`（语义＝上报时刻 − 事件时刻，
+  当场立即上报即为 0）与 `timestamp`；新增回归测试锁死这两个字段。
+- 事件口径改为**客户端原样**（从国际版客户端 `app.asar` 实测逆向得到）：
+  - checklist 的**任务码本身就是客户端 eventCode**：`skill_installed` / `expert_summoned` /
+    `template_used` / `wechat_linked`；
+  - 必须带业务字段，否则不计分：`skill_installed→{name,skillId,skillVersion}`、
+    `expert_summoned→{id,name,expertTitle,type,version}`、
+    `template_used→{template_id,task_mode}`（注意是**下划线**）、
+    `chat_response_complete→{conversationId,requestId,artifactType}`；
+  - **双通道**：客户端同时打 `/v2/report`（标准事件，msg=OK）与 `/llm/data/report`
+    （模型事件，msg=success）。面板新增 `ReportDesktopEventAll`，global 账号走双通道，
+    国服保持单通道（国服没有该端点，硬打会 404 噪音）。
+- **实测现状（诚实结论）**：按上述客户端口径上报后，两条通道**均返回成功**，但
+  checklist 的 `status` 仍为 `available`，`/v2/activity/growth/profile` 仍
+  `completed=0 / total=5 / first_visit=true` —— 服务端对国际版 checklist 的计分**另有判据**，
+  纯 API 点不亮。国际版**也没有** accept / claim / complete 端点（全部 404 或
+  `400 invalid request`），即完成判定纯在服务端。
+- 故面板**不再对国际版 checklist 承诺「一键完成」**：新增 `client` 分类（与 `auto` 区分），
+  扫描结果里标「需在 WorkBuddy 客户端完成」并**逐项给出操作指引**；用户在客户端做完，
+  面板回读自动核销。执行结果一律 `unverified`（**绝不谎报 done**），并写明原因
+  （「已上报未计分」/「未取到真实业务 ID」）。
+
+### 修复：国际版对话按 realm 分流 + 桌面对话事件头统一
+
+- `upstream.DesktopChatWithExpert` 按 `a.IsGlobal()` 分流：国际版用 `default-model` +
+  英文提示词；出站头改走 `ChatHeaders`（统一会话头族），`X-IDE-Version` 取实际客户端版本，
+  不再硬编码 `5.5.6`。
+
+### 其他
+
+- 签到池操作列 / 表头对齐修复，弹窗与设置页冗余文案精简（`internal/panel/app.js`、
+  `internal/panel/index.html`）。
+
 ## 2026-11-17（v1.15.9-panel）
 
 ### 新增：Google Gemini 官方 API Key 通道
