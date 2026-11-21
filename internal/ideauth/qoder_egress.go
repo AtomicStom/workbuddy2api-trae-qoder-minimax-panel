@@ -64,6 +64,7 @@ type QoderEgressProfile struct {
 	ProxyURL   string `json:"proxy_url,omitempty"`
 	ProfileDir string `json:"profile_dir,omitempty"`
 	UpdatedAt  string `json:"updated_at"`
+	Explicit   bool   `json:"explicit,omitempty"`
 }
 
 // QoderEgressPool 出口配置文件结构（profiles 键为小写邮箱）。
@@ -179,7 +180,7 @@ func QoderEgressFor(email string) QoderEgressProfile {
 //
 // ⚠️ 2026-11-14：默认值从 real 改成 **auto** —— 之前默认 real 意味着
 // 号池里所有号共用同一台真实设备（用户诉求：「两个号肯定应该不一样」）。
-// auto 下由 QoderEffectiveDeviceMode 按号池顺序分配 real/derived。
+// auto 下由 QoderEffectiveDeviceMode 解析为真实设备。
 func qoderEgressProfileOf(pool *QoderEgressPool, email string) QoderEgressProfile {
 	key := normalizeQoderEmail(email)
 	def := QoderEgressProfile{Email: key, DeviceMode: QoderDeviceModeAuto}
@@ -229,6 +230,7 @@ func SetQoderEgress(email, mode, proxyURL, profileDir string) (*QoderEgressProfi
 		ProxyURL:   proxy,
 		ProfileDir: strings.TrimSpace(profileDir),
 		UpdatedAt:  time.Now().Format(time.RFC3339),
+		Explicit:   true,
 	}
 	pool.Profiles[key] = prof
 	if err := saveQoderEgressLocked(pool); err != nil {
@@ -244,7 +246,7 @@ func SetQoderEgress(email, mode, proxyURL, profileDir string) (*QoderEgressProfi
 // **号池里每出现一个账号，就自动给它写一条 egress 条目**，用户零操作。
 //
 // 补全内容：
-//   - device_mode = auto（自动分配：号池第一个号 real，其余 derived）；
+//   - device_mode = auto（使用本机真实设备）；
 //   - profile_dir = 按邮箱隔离的浏览器 profile 目录（自动生成，不手填）；
 //   - proxy_url 留空（没有代理资源时不该编一个）。
 //
@@ -286,12 +288,12 @@ func EnsureQoderEgress() (int, error) {
 		if strings.TrimSpace(prof.DeviceMode) == "" {
 			prof.DeviceMode = QoderDeviceModeAuto
 			acctChanged = true
-		} else if prof.DeviceMode == QoderDeviceModeReal && qoderEgressLooksUntouched(prof, email) {
+		} else if prof.DeviceMode == QoderDeviceModeReal && !prof.Explicit && qoderEgressLooksUntouched(prof, email) {
 			// 存量迁移（2026-11-15）：老版本默认就是 real，号池里每个号都被写成
 			// real。auto 的展开也是 real（派生身份实测领不到额度），所以这次迁移
 			// 只是把「用户没手动指定过」这件事标记出来（面板上显示「自动」，
 			// 与手动 real 区分得开），行为不变。
-			// 判定「用户没真改过」：没配代理 + profile 目录就是按邮箱自动生成的那个
+			// 判定「用户没真改过」：无显式保存标记、没配代理且 profile 目录按邮箱自动生成
 			// （目录名 = 邮箱短哈希）。配了代理或改过目录名的条目保持不动。
 			prof.DeviceMode = QoderDeviceModeAuto
 			prof.UpdatedAt = time.Now().Format(time.RFC3339)

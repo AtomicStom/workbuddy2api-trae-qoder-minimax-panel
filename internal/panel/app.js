@@ -58,7 +58,7 @@ async function api(path, opts = {}) {
   if (k && /^[\x00-\xff]*$/.test(k)) h['Authorization'] = 'Bearer ' + k;
   if (opts.body) h['Content-Type'] = 'application/json';
   // 只合并「读」请求：写操作（签到/切换/删除）必须各自独立发出。
-  const mergeable = !opts.method || String(opts.method).toUpperCase() === 'GET';
+  const mergeable = opts.cache !== 'no-store' && (!opts.method || String(opts.method).toUpperCase() === 'GET');
   if (mergeable) {
     const inflight = _apiInflight.get(path);
     if (inflight) return inflight;
@@ -2362,12 +2362,11 @@ async function loadTasks() {
       if (t.checklist) {
         // 清单型：状态词表是 available / completed / claimed，没有 accept_status。
         // 「未完成」不能渲染成「未接受」——那会让人去找一个根本不存在的报名按钮。
-        const done = !t.claimed && t.status === 'completed';
         badge = t.claimed ? '<span class="tag ok">已领取</span>'
-          : done ? '<span class="tag warn">可领取</span>'
+          : t.claimable ? '<span class="tag warn">可领取</span>'
           : '<span class="tag mute">未完成</span>';
         acted = t.claimed ? ''
-          : done ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
+          : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
           : '<span class="hint" style="font-size:11.5px">客户端完成</span>';
       } else {
         badge = t.claimed ? '<span class="tag ok">已领取</span>'
@@ -2985,6 +2984,10 @@ function renderScanResult(d) {
   renderScanErrors(d);
   const groups = groupItems(d || {});
   const failed = scanHasError(d);
+  const runButton = $('btnRunQueue');
+  if (runButton) {
+    runButton.disabled = !groups.some(group => group.rows.some(row => row.status === 'scan'));
+  }
   if (!groups.length) {
     const empty = $('tcEmpty'), list = $('qcList');
     $('qProg').hidden = true;
@@ -3019,7 +3022,7 @@ $('btnScanAll').onclick = async () => {
 };
 $('btnRunQueue').onclick = async () => {
   const conc = Number($('qcConc').value) || 1;
-  if (!confirm('扫描全部账号待办并排队执行（账号并发 ' + conc + '，账号内串行）。\n含真实对话的任务耗时较长，确认继续？')) return;
+  if (!confirm('执行可自动完成的任务并领取已达标奖励（账号并发 ' + conc + '）。\n含真实对话的任务可能需要一些时间，确认继续？')) return;
   const b = $('btnRunQueue');
   b.disabled = true; b.textContent = '启动中…';
   try {
@@ -3039,7 +3042,7 @@ $('btnRunQueue').onclick = async () => {
     toast('队列已启动：' + r.total + ' 项（并发 ' + conc + '）', 'ok');
     startQueuePolling();
   } catch (e) { toast(e.message, 'err'); }
-  finally { b.disabled = false; b.textContent = '执行全部待办'; }
+  finally { b.disabled = false; b.textContent = '执行可自动任务'; }
 };
 // 扫描结果 → 分组条目（无执行状态）
 //
@@ -3066,10 +3069,10 @@ function groupItems(d) {
       const act = t.action || 'manual';
       // client 分类（国际版 checklist）：上游的 task_desc 只是泛泛的达成条件，
       // 真正可操作的是逐项客户端指引 —— 指引在前、上游描述在后，两个都给。
-      const hint = act === 'client' ? (INTL_CLIENT_HINT[t.task_code] || '') : '';
+      const hint = INTL_CLIENT_HINT[t.task_code] || '';
       const desc = t.task_desc || t.description || '';
       const message = hint ? (desc ? hint + '（' + desc + '）' : hint) : desc;
-      rows.push({ kind: 'growth', code: t.task_code, prog: t.target ? t.current + '/' + t.target : '—', status: 'manual', message, action: act });
+      rows.push({ kind: 'growth', code: t.task_code, prog: t.target ? t.current + '/' + t.target : '—', status: act === 'client' ? 'client' : 'manual', message, action: act });
     }
     if (rows.length) groups.push({
       uid: a.uid, nick: a.nickname, rows: rows,
@@ -3084,7 +3087,7 @@ function groupItems(d) {
 const ST_WORDS = {
   done: '完成', partial: '部分完成', unverified: '未证实', failed: '失败',
   running: '执行中', error: '失败', skipped: '跳过', pending: '排队',
-  scan: '待执行', locked: '未解锁', manual: '需手动',
+  scan: '待执行', locked: '未解锁', manual: '需手动', client: '需客户端',
 };
 const LOCKED_MSG = '上游尚未解锁（Sequential 链条每日零点解锁下一环，解锁后自动执行）';
 const MANUAL_MSG = '需真实操作（关注公众号 / 真实捐款 / 客户端行为），网关无法代为完成';
@@ -3092,9 +3095,7 @@ const MANUAL_MSG = '需真实操作（关注公众号 / 真实捐款 / 客户端
 const ACTION_TIP = {
   auto: '可自动执行', claim_only: '进度已达标，自动领奖',
   locked_auto: '有自动动作但上游未解锁', manual: '需真实操作',
-  // 国际版成长路径 checklist：面板已按客户端口径上报并持续回读，
-  // 但服务端计分另有判据、纯 API 点不亮 —— 必须回客户端做，做完面板自动核销。
-  client: '需在 WorkBuddy 客户端完成',
+  client: '由 WorkBuddy 核实进度',
 };
 // INTL_CLIENT_HINT 国际版成长路径逐项的客户端操作指引（与后端 upstream.IntlChecklistClientHint 同源）。
 const INTL_CLIENT_HINT = {
@@ -3114,14 +3115,14 @@ function qrowHTML(it) {
   const dotCls = status === 'running' ? 'run' : status === 'failed' ? 'err'
     : status === 'skipped' ? 'skip' : status === 'done' ? 'done'
     : status === 'unverified' ? 'skip' : 'wait';
-  const stWord = status === 'scan' ? '待执行' : (ST_WORDS[status] || status);
+  const stWord = ST_WORDS[status] || status;
   const lk = status === 'locked' ? fmtUnlock(it.unlock) : '';
   const msg = status === 'locked'
     ? (lk ? '上游锁定至 ' + lk + '，到点由面板自动执行' : LOCKED_MSG)
-    : status === 'manual'
-      ? (it.message || (it.action === 'client'
-          ? (INTL_CLIENT_HINT[it.code] || MANUAL_MSG)
-          : MANUAL_MSG))
+    : status === 'client'
+      ? (it.message || INTL_CLIENT_HINT[it.code] || '在 WorkBuddy 客户端操作后重新扫描')
+      : status === 'manual'
+        ? (it.message || MANUAL_MSG)
       : (it.message || '');
   // 队列结果：行内显示 verified 与 progress_before → progress_after。
   let prog = it.prog || '';
@@ -3138,7 +3139,6 @@ function qrowHTML(it) {
     '<span class="name"><span class="t">' + esc(title) + '</span>' +
     (isSchool ? '<span class="tag mute">开学季</span>' : '') +
     (status === 'locked' ? '<span class="tag mute">' + (lk ? lk + ' 解锁' : '未解锁') + '</span>' : '') +
-    (status === 'manual' ? '<span class="tag mute">需手动</span>' : '') +
     actionTag + verifiedTag + '</span>' +
     '<span class="prog">' + esc(prog) + '</span>' +
     '<span class="st"><span class="qdot ' + dotCls + '"></span>' + stWord + '</span>' +
@@ -3156,15 +3156,17 @@ function renderQueue(groups, progress, emptyTitle, emptyDesc) {
     return;
   }
   empty.style.display = 'none';
-  let total = 0, lockedN = 0, manualN = 0;
+  let total = 0, lockedN = 0, manualN = 0, clientN = 0;
   list.innerHTML = groups.map(g => {
-    const runnable = g.rows.filter(r => r.status !== 'locked' && r.status !== 'manual').length;
+    const runnable = g.rows.filter(r => !['locked', 'manual', 'client'].includes(r.status)).length;
     const locked = g.rows.filter(r => r.status === 'locked').length;
     const manual = g.rows.filter(r => r.status === 'manual').length;
-    total += runnable; lockedN += locked; manualN += manual;
-    const parts = [runnable + ' 项待办'];
+    const client = g.rows.filter(r => r.status === 'client').length;
+    total += runnable; lockedN += locked; manualN += manual; clientN += client;
+    const parts = [runnable + (progress ? ' 项队列任务' : ' 项可自动执行')];
     if (locked) parts.push(locked + ' 项未解锁');
     if (manual) parts.push(manual + ' 项需手动');
+    if (client) parts.push(client + ' 项需客户端');
     let cnt = parts.join(' · ');
     // 契约 2.2.17：组标题额外显示 upstream_total / incomplete_total。
     const up = Number(g.upstreamTotal), inc = Number(g.incompleteTotal);
@@ -3177,16 +3179,17 @@ function renderQueue(groups, progress, emptyTitle, emptyDesc) {
       gtag + '</span><span class="cnt">' + cnt + '</span></header>' +
       g.rows.map(qrowHTML).join('') + '</div>';
   }).join('');
-  const sum = [total + ' 项'];
+  const sum = [total + (progress ? ' 项队列任务' : ' 项可自动执行')];
   if (lockedN) sum.push(lockedN + ' 项未解锁');
   if (manualN) sum.push(manualN + ' 项需手动');
+  if (clientN) sum.push(clientN + ' 项需客户端');
   $('qcSummary').textContent = sum.join(' · ');
   updateProgress(progress);
 }
 function updateProgress(q) {
   if (!q || !q.items) { $('qProg').hidden = true; return; }
   const total = q.items.length;
-  const done = q.items.filter(it => it.status === 'done' || it.status === 'error' || it.status === 'skipped').length;
+  const done = q.items.filter(it => it.status !== 'pending' && it.status !== 'running').length;
   $('qProg').hidden = false;
   $('qBarFill').style.width = (total ? Math.round(done / total * 100) : 0) + '%';
   $('qProgText').textContent = (q.running ? '执行中 ' : '已结束 ') + done + ' / ' + total;
@@ -4846,7 +4849,7 @@ async function doQoderCheckin(btn, email) {
       const parts = ['已领取 ' + claimed + (credits ? '（+' + credits + ' Credits）' : '')];
       if (already) parts.push('今日已领 ' + already);
       if (blocked) parts.push('同一人已领 ' + blocked + '（未签到）');
-      if (pending) parts.push('今日未下发 ' + pending);
+      if (pending) parts.push('待核实 ' + pending);
       if (failed) parts.push('失败 ' + failed);
       if (needLogin) parts.push('需重新登录 ' + needLogin);
       if (errored) parts.push('错误 ' + errored);
@@ -4880,7 +4883,7 @@ function qdProbeLine(p) {
   return '探测结论：' + (criterion || 'unknown') + ' · ' + (conclusion || 'inconclusive');
 }
 
-async function openQoderEgress(email) {
+async function openQoderEgress(email, fresh = false) {
   const veil = $('qdEgressVeil');
   if (!veil) { toast('设备/出口设置面板未加载', 'err'); return; }
   veil.classList.add('on');
@@ -4896,9 +4899,12 @@ async function openQoderEgress(email) {
   if ($('qdEgressProxy')) $('qdEgressProxy').value = '';
   if ($('qdEgressProfile')) $('qdEgressProfile').value = '';
   const body = $('qdEgressBody');
+  const save = $('btnQdEgressSave');
+  if (save) save.disabled = true;
   if (body) body.innerHTML = '<div class="note">查询中…</div>';
   try {
-    const d = await api('ide/qoder/egress');
+    const d = await api('ide/qoder/egress', fresh ? { cache: 'no-store' } : {});
+    if (!veil.classList.contains('on') || $('qdEgressEmail').value !== email) return;
     const profiles = (d && d.profiles) || [];
     const key = String(email || '').toLowerCase();
     const p = profiles.find(x => String((x && x.email) || '').toLowerCase() === key) || null;
@@ -4910,14 +4916,15 @@ async function openQoderEgress(email) {
     if (body) {
       body.innerHTML = p
         ? '<div class="note">当前：' + esc(identLabel(p.email, '未设置')) + ' · 设备 ' + esc(qdDeviceModeText(p)) +
-          ' · 出口 ' + esc(p.proxy_url || '默认网络') +
+          ' · ' + (p.proxy_url ? '已配置代理' : '默认网络') +
           (p.updated_at ? ' · 更新于 ' + esc(caTime(p.updated_at) || p.updated_at) : '') + '</div>' +
           '<div class="note" data-qd-probe="' + esc(p.email || '') + '">' + esc(qdProbeLine(p)) + '</div>'
         : '<div class="note">该账号尚无独立设备/出口配置（默认＝真实设备 + 进程默认网络）。</div>';
     }
+    if (save) save.disabled = false;
   } catch (e) {
     // 老后端未注册路由（404）：按“无配置”降级，不抛异常、不编造结论。
-    if (body) body.innerHTML = '<div class="note">读取设备/出口配置失败：' + esc(e.message) + '</div>';
+    if (body && $('qdEgressEmail').value === email) body.innerHTML = '<div class="note">读取设备/出口配置失败：' + esc(e.message) + '</div>';
   }
 }
 
@@ -4941,6 +4948,7 @@ async function saveQoderEgress() {
   if (!email) { toast('缺少邮箱', 'err'); return; }
   if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
   if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+  let saved = false;
   try {
     const payload = { email: email, device_mode: mode };
     if (proxy) payload.proxy_url = proxy;
@@ -4949,14 +4957,22 @@ async function saveQoderEgress() {
     if (!d || d.ok !== true) {
       throw new Error((d && (d.error || d.message)) || '保存失败');
     }
-    toast('已保存设备/出口配置：' + email, 'ok');
-    if ($('qdEgressVeil')) $('qdEgressVeil').classList.remove('on');
-    if (!viewFrozen()) loadCkQoder(true);
+    const effective = d.effective_device_mode || mode;
+    const label = effective === 'derived' ? '派生设备' : '真实设备';
+    toast(identLabel(email) + '已保存 · ' + label + ' · ' + (proxy ? '已配置代理' : '默认网络'), 'ok');
+    saved = true;
+    if ($('qdEgressEmail').value === email && $('qdEgressVeil').classList.contains('on')) await openQoderEgress(email, true);
+    if (view === 'checkin') loadCkQoder(true, true);
   } catch (e) {
     // 400 invalid_device_mode / invalid_proxy_url 等原样展示。
     if (errEl) { errEl.hidden = false; errEl.className = 'state err'; errEl.textContent = e.message; }
     toast('保存失败：' + e.message, 'err');
-  } finally { if (btn) { btn.disabled = false; btn.textContent = '保存'; } }
+  } finally {
+    if (btn) {
+      btn.textContent = '保存';
+      if (!saved && $('qdEgressEmail').value === email) btn.disabled = false;
+    }
+  }
 }
 
 /* ── Qoder 领取历史（C-QD-LEDGER@1 / C-QD-API@1 C）────────────────── */
@@ -5428,13 +5444,13 @@ let lastQoderCheckin = null; // 最近一次一键签到的原始响应，用于
 const QD_PHASE_ORDER = ['claimed', 'already', 'blocked', 'pending', 'failed', 'login_required', 'error'];
 const QD_PHASE_TEXT = {
   claimed: '已领取', already: '今日已领', blocked: '同一人已领（未签到）',
-  pending: '今日未下发', failed: '失败', login_required: '需重新登录', error: '错误',
+  pending: '待核实', failed: '失败', login_required: '需重新登录', error: '错误',
 };
 // strategy 文案：只在上游真有证据时才说「服务端判定同人」（2026-11-04 实测：
 // 服务端并未判这两个号同人 —— 两号 grantId 不同、各自 +100）。
 const QD_STRATEGY_TEXT = {
   isolated: '额度独立（各号各一份）', shared_person: '服务端判定同人',
-  rotated: '按人轮换', unassigned: '今日未下发', unknown: '归属未核实',
+  rotated: '按人轮换', unassigned: '待核实', unknown: '归属未核实',
 };
 
 function qdPhaseText(p) { return QD_PHASE_TEXT[p] || p || '未知'; }
@@ -5521,9 +5537,12 @@ function renderQoderBuckets() {
     '<div class="note">本次没有账号参与签到。</div>';
 }
 
-async function loadCkQoder(quiet) {
+let qoderRowsRequest = 0;
+async function loadCkQoder(quiet, fresh = false) {
   const st = $('ckQoderState'), list = $('ckQoderList');
   if (!st || !list) return;
+  const request = ++qoderRowsRequest;
+  const options = fresh ? { cache: 'no-store' } : {};
   if (!quiet) { st.hidden = false; st.className = 'state'; st.innerHTML = '<span class="dots">查询中</span>'; list.innerHTML = ''; }
   try {
     // ① 先只取账号列表（本地读，2ms）→ 立刻把卡片画出来。
@@ -5533,6 +5552,7 @@ async function loadCkQoder(quiet) {
     // （checkin-status 打上游）才出现，而其他平台 accounts 是本地读、0.1s 就好
     // —— 用户看到的「Qoder 比别的加载慢」就是这么来的。改成两阶段渲染。
     const d = await api('ide/qoder/accounts');
+    if (request !== qoderRowsRequest) return;
     const cur = d.current_email || '';
     const arr = d.accounts || [];
     // 号池为空但本机有登录态：仍然展示当前号（后端会回退成「签当前账号」）。
@@ -5547,11 +5567,15 @@ async function loadCkQoder(quiet) {
     // 骨架：先出账号行，状态列占位「查询中…」。
     renderQoderRows(rows, arr, cur, null);
     // 设备身份（生效值）：本地读，很快 —— 并行取，不拖慢状态列。
-    const eg = await api('ide/qoder/egress').catch(() => null);
-    // 状态查询在后台补：拿到真值后整表重绘一次。
-    const st2 = await api('ide/qoder/checkin-status').catch(() => null);
+    const [eg, st2] = await Promise.all([
+      api('ide/qoder/egress', options).catch(() => null),
+      api('ide/qoder/checkin-status', options).catch(() => ({ results: [] })),
+    ]);
+    if (request !== qoderRowsRequest) return;
     renderQoderRows(rows, arr, cur, st2, eg);
-  } catch (e) { st.hidden = false; st.className = 'state err'; st.textContent = e.message; }
+  } catch (e) {
+    if (request === qoderRowsRequest) { st.hidden = false; st.className = 'state err'; st.textContent = e.message; }
+  }
 }
 
 // qdDeviceTags 返回「账号 → 设备身份标签」的映射（用于卡片上显示）。
@@ -5579,10 +5603,7 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
   ((st2 && st2.results) || []).forEach(r => {
     if (!r || !r.email) return;
     const k = String(r.email).toLowerCase();
-    // checked_in_today 由后端按**上游活动列表**判定（真签到口径）。
-    // ⚠️ 此前这里读的是 checked_in_local（本地记录，可能是旧版误报），
-    //    且顶层 checked_in_today 是「今天整体没有可领的了」的**聚合值**，
-    //    被当成当前登录号的状态用 —— 两个号的签到显示因此整个反了。
+    // checked_in_today 可能来自本地账本。列表用 phase 区分上游确认与本地记录。
     doneMap[k] = !!r.checked_in_today;
     quotaMap[k] = !!r.same_person_taken;
     msgMap[k] = r.msg || '';
@@ -5593,11 +5614,17 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
     lastClaimMap[k] = r.last_claimed_at || '';
     histDaysMap[k] = r.claim_history_days || 0;
   });
-  // 当前登录号：用 current.checked_in_today（**单号**口径），不用顶层聚合值。
-  if (cur && st2 && st2.current && typeof st2.current.checked_in_today === 'boolean') {
-    doneMap[cur.toLowerCase()] = !!st2.current.checked_in_today;
+  const currentStatus = st2 && st2.current;
+  const currentKey = String(cur || '').toLowerCase();
+  if (currentStatus && currentKey && !phaseMap[currentKey] &&
+      String(currentStatus.email || '').toLowerCase() === currentKey) {
+    doneMap[currentKey] = !!currentStatus.checked_in_today;
+    phaseMap[currentKey] = currentStatus.phase || '';
+    msgMap[currentKey] = currentStatus.msg || '';
   }
-  const doneCount = rows.filter(a => doneMap[String(a.email || '').toLowerCase()]).length;
+  const keys = rows.map(a => String(a.email || '').toLowerCase());
+  const doneCount = keys.filter(k => doneMap[k] && phaseMap[k] === 'claimed').length;
+  const localCount = keys.filter(k => doneMap[k] && phaseMap[k] !== 'claimed' && !quotaMap[k]).length;
   const devTagMap = qdDeviceTags(eg);
   // 「人」组数：服务端判定为同一个人的账号共享同一份每日额度，组数才是"能领几份"。
   const groups = new Set();
@@ -5608,8 +5635,9 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
   const sharedGroups = rows.filter(a => (a.quota_group || 0) > 1).length;
   if ($('ckQoderSummary')) {
     let s = rows.length
-      ? ('共 ' + rows.length + ' 个 · 已签 ' + (st2 ? doneCount : '…') + (arr.length ? '' : '（号池为空，仅当前号）'))
+      ? ('共 ' + rows.length + ' 个 · 上游确认已领 ' + (st2 ? doneCount : '…') + (arr.length ? '' : '（号池为空，仅当前号）'))
       : '号池为空';
+    if (localCount) s += ' · 仅本地有记录 ' + localCount;
     if (rows.length > 1) {
       s += ' · ' + groups.size + ' 个额度组';
       if (sharedGroups > 0) {
@@ -5649,18 +5677,22 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
         ? (phaseMap[k] === 'already' && holder
           ? UI.badge('mute2', '○', '同一人已领（未入账）',
               why || ('今日额度已由同一人另一个账号 ' + holder + ' 领取，本号账上未新增积分'))
-          : UI.badge('ok', '✓', '今日已签到', why || '上游活动列表确认今天已领取'))
+          : phaseMap[k] === 'claimed'
+            ? UI.badge('ok', '✓', '上游确认已领', why || '上游活动列表确认今天已领取')
+            : UI.badge('mute2', '○', '本地有记录', '面板有该账号的本地签到记录，上游领取结果待核实'))
         : (phaseMap[k] === 'pending'
           ? (quota
             ? UI.badge('mute2', '○', '同一人已领（未签到）', why || quotaTip)
-            : UI.badge('mute2', '○', '今日未下发', why || '上游当前没有下发每日签到活动（限时活动已结束或未开放）；下发后 30 分钟内自动领取'))
+            : UI.badge('mute2', '○', '未查到可领活动', why || '请在该账号的 Qoder 客户端确认'))
           : (phaseMap[k] === 'login_required'
             ? UI.badge('todo', '!', '需重新登录', why || '凭证已失效，请重新登录该账号后再添加')
             : (phaseMap[k] === 'error'
               ? UI.badge('todo', '!', '查询失败', why || '上游查询失败')
               : (a.expired
                 ? UI.badge('todo', '!', '凭证过期', why || '凭证已过期，请重新登录后添加')
-                : UI.badge('warn', '○', '可签到', why || '上游活动列表里有今天可领的签到活动'))))));
+                : phaseMap[k] === 'claimable'
+                  ? UI.badge('warn', '○', '可签到', why || '上游活动列表里有今天可领的签到活动')
+                  : UI.badge('mute2', '○', '待核实', '未获取该账号的签到状态'))))));
     // 轮换/历史：字段缺失（老后端）时整行不显示，不编造默认值。
     // ⚠ 2026-10-31：原来这里还显示「策略：xxx」，用户要求去掉这个文案
     //   —— 每个号下面挂一句策略说明纯属噪音，真正要看的状态在右侧徽章上。
@@ -5681,13 +5713,13 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
       (a.current ? '<span class="tag mute" style="margin-left:6px">当前登录</span>' : '') + groupTag + '</div>' +
       '<div class="id">' + esc(identLabel(email, '未设置')) + '</div>' + metaHTML + '</div>' +
       '<div class="credits" data-qk-cred="' + esc(email) + '"><span class="note">查询中…</span></div>' +
-      '<div>' + status + '</div>' +
+      '<div data-qd-status>' + status + '</div>' +
       '<div class="acts">' +
       (!st2
         ? '<span class="note">—</span>'
-        : (isDone ? UI.off('已签到', '今日已签到') : UI.act('data-ck-qoder', email, '签到', '今天让这个号先领（池里其余号也会一起打一遍）'))) +
-      UI.sub('data-qd-relogin', email, '重新登录', '在 Qoder 客户端里用这个号扫码登录一次（上游没给这个号下发当日活动时的正解）') +
-      UI.sub('data-qd-egress', email, '设备/出口', '设备身份默认＝真实设备（能稳定领到每日额度），这里可手动覆盖 / 配出口代理') +
+        : (isDone ? UI.off('已记录', '该账号已有签到记录') : UI.act('data-ck-qoder', email, '签到', '今天让这个号先领（池里其余号也会一起打一遍）'))) +
+      UI.sub('data-qd-relogin', email, '重新登录', '在 Qoder 客户端里重新登录此账号并同步会话') +
+      UI.sub('data-qd-egress', email, '设备/出口', '查看面板发起 Qoder 请求时使用的设备模式和代理') +
       UI.sub('data-qd-history', email, '历史', '查看最近 7 天领取历史') +
       '</div>' +
       '</div>';
@@ -5717,6 +5749,12 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
       const total = ((u.user_quota && u.user_quota.remaining) || 0) + ((u.add_on_quota && u.add_on_quota.remaining) || 0);
       cell.innerHTML = '<b>' + total.toLocaleString('zh-CN') + '</b>' +
         (u.plan_tier_name ? ' <span class="tag mute">' + esc(u.plan_tier_name) + '</span>' : '');
+      const key = email.toLowerCase();
+      if (u.plan_tier === 'free' && phaseMap[key] === 'pending' && !doneMap[key] && !quotaMap[key]) {
+        const statusCell = cell.closest('[data-qd-row]').querySelector('[data-qd-status]');
+        statusCell.innerHTML = UI.badge('mute2', '○', '未查到可领活动',
+          '上游方案显示为 Free。Qoder 国际版每日 100 Credits 活动面向 Pro 试用及个人付费订阅。具体领取状态以该账号的 Qoder 客户端为准。');
+      }
     }).catch(e => { cell.innerHTML = '<span class="note">' + esc(e.message) + '</span>'; });
   });
 }
@@ -6439,7 +6477,7 @@ async function doCheckinAll(btn) {
       const qfail = qc.failed + qc.login_required + qc.error;
       let qtxt = '已领 ' + qc.claimed + ' · 今日已领 ' + qc.already +
         (qc.blocked ? ' · 同一人已领 ' + qc.blocked + '（未签到）' : '') +
-        (qc.pending ? ' · 今日未下发 ' + qc.pending : '') +
+        (qc.pending ? ' · 待核实 ' + qc.pending : '') +
         (qfail ? ' · 失败 ' + qfail : '');
       if (q && q.credits) qtxt += '（+' + q.credits + '）';
       return ['Qoder ' + qtxt, qfail];

@@ -1199,7 +1199,7 @@ const c = ctx.qdCounts(d.results);
 process.stdout.write(JSON.stringify({
   html: html,
   counts: c,
-  hasAllPhasesInSum: ['已领取 1','今日已领 1','同一人已领（未签到） 1','今日未下发 1','失败 1','需重新登录 1','错误 1']
+  hasAllPhasesInSum: ['已领取 1','今日已领 1','同一人已领（未签到） 1','待核实 1','失败 1','需重新登录 1','错误 1']
     .every(s => html.indexOf(s) >= 0),
   noPerRow: html.indexOf('data-qd-result=') < 0 && html.indexOf('data-qd-bucket=') < 0,
   noFakeGain: html.indexOf('本轮实际入账：+100 Credits') >= 0 &&

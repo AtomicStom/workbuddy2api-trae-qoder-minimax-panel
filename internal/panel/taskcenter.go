@@ -51,11 +51,7 @@ const (
 	scanActionClaimOnly  = "claim_only"  // 已达标，无需动作，直接领奖
 	scanActionLockedAuto = "locked_auto" // 有自动动作但上游锁定
 	scanActionManual     = "manual"      // 面板无自动动作，需真实操作
-	// scanActionClient 需在官方客户端完成（国际版成长路径 checklist）。
-	//
-	// 与 scanActionManual 的区别：面板**有**上报动作（按客户端口径）且会回读，
-	// 但服务端计分另有判据、纯 API 点不亮，所以既不能标 auto（虚假承诺），
-	// 也不能混进 manual（面板其实已经在做了）。前端据此外键渲染客户端操作指引。
+	// 国际版成长路径未达标时只展示客户端指引。
 	scanActionClient = "client"
 )
 
@@ -127,28 +123,13 @@ type scanError struct {
 //
 // 保留该分类函数供既有测试与其它调用方复用；scanActionFor 与本函数口径一致。
 func growthPending(t upstream.Task) bool {
-	if t.Claimed {
-		return false
-	}
-	// 上游锁定的任务不出待办：Sequential 族每日零点解锁一环，刚做完上一环时
-	// 下一环以下发但 locked 形态出现在列表里——扫进队列只会 accept 不落账报
-	// 失败（每日锁定窗口），零点解锁后自然回到待办。其余 locked（上游未开放）
-	// 同语义：不该被自动化尝试。
-	if t.Locked {
-		return false
-	}
-	// 已达标（可领奖）：**无论有没有自动动作**都入队。有动作的跑完自动领奖；
-	// 没动作的（关注公众号 / 真实捐款 / 客户端行为）走「只领奖」路径——用户
-	// 做完真实操作后，面板到点自动把奖励领回来，不必手动点。
-	if t.Target > 0 && t.Current >= t.Target {
-		return true
-	}
-	return autoActionFor(t.TaskCode) != nil
+	action := scanActionFor(t)
+	return !t.Claimed && (action == scanActionAuto || action == scanActionClaimOnly)
 }
 
 // growthLocked 任务是否「有自动动作、但上游未解锁」（扫描结果里单独展示）。
 func growthLocked(t upstream.Task) bool {
-	return t.Locked && !t.Claimed && autoActionFor(t.TaskCode) != nil
+	return !t.Claimed && scanActionFor(t) == scanActionLockedAuto
 }
 
 // growthManual 任务是否「未完成、但面板没有自动动作」——需真实世界行为或
@@ -157,7 +138,8 @@ func growthLocked(t upstream.Task) bool {
 // 注意**不排除 Locked**：锁定且没有动作的任务永远不会自动执行，标成
 // 「未解锁·到点自动执行」是误导；它的真实状态就是「面板帮不上忙」，应落 Manual 桶。
 func growthManual(t upstream.Task) bool {
-	return !t.Claimed && autoActionFor(t.TaskCode) == nil
+	action := scanActionFor(t)
+	return !t.Claimed && (action == scanActionManual || action == scanActionClient)
 }
 
 // scanActionFor 按 C-WB-SCAN@1 2.2.13 规则 2 判定任务动作。
@@ -165,20 +147,19 @@ func growthManual(t upstream.Task) bool {
 // 顺序与契约一致：已达标（!Locked && Target>0 && Current>=Target）→ claim_only；
 // 有自动动作（未锁定）→ auto；有自动动作（锁定）→ locked_auto；其余 → manual。
 func scanActionFor(t upstream.Task) string {
+	if t.ReadyToClaim() {
+		return scanActionClaimOnly
+	}
+	if t.Checklist {
+		return scanActionClient
+	}
 	if t.Locked {
 		if autoActionFor(t.TaskCode) != nil {
 			return scanActionLockedAuto
 		}
 		return scanActionManual
 	}
-	if t.Target > 0 && t.Current >= t.Target {
-		return scanActionClaimOnly
-	}
-	if act := autoActionFor(t.TaskCode); act != nil {
-		if act.ClientOnly {
-			// 国际版成长路径：面板按客户端口径上报，但不承诺完成 → 独立分类。
-			return scanActionClient
-		}
+	if autoActionFor(t.TaskCode) != nil {
 		return scanActionAuto
 	}
 	return scanActionManual
@@ -424,10 +405,11 @@ type queueAccount struct {
 
 // growthQueuePlan 一次队列扫描的结果（账号分组 + 待执行条目 + 错误 + 跳过账号）。
 type growthQueuePlan struct {
-	accounts []queueAccount
-	items    []queueItem
-	errors   []scanError
-	skipped  []string
+	accounts   []queueAccount
+	items      []queueItem
+	errors     []scanError
+	skipped    []string
+	unrunnable int
 }
 
 // buildGrowthQueue 扫描全部账号并生成执行队列（与 tasksScanAll 共用
@@ -447,9 +429,10 @@ func (p *Panel) buildGrowthQueue(growth bool) growthQueuePlan {
 	}
 
 	type row struct {
-		acct *queueAccount
-		errs []scanError
-		skip bool
+		acct       *queueAccount
+		errs       []scanError
+		skip       bool
+		unrunnable int
 	}
 	rows := make([]row, len(states))
 	var wg sync.WaitGroup
@@ -470,18 +453,8 @@ func (p *Panel) buildGrowthQueue(growth bool) growthQueuePlan {
 			if !growth {
 				return
 			}
-			// 入队集合 = Growth 桶（auto + claim_only）**加上**国际版 checklist（client 分类）。
-			//
-			// 国际版 checklist 落在 Manual 桶（面板不承诺自动完成），但仍入队执行：
-			// 面板会按客户端口径上报并回读，上游一旦放开计分即刻自动点亮；
-			// 未点亮时结果行如实写明「已上报未计分 + 需在客户端完成」。
-			queued := make([]scanTask, 0, len(it.Growth)+len(it.Manual))
-			queued = append(queued, it.Growth...)
-			for _, e := range it.Manual {
-				if e.Action == scanActionClient {
-					queued = append(queued, e)
-				}
-			}
+			queued := it.Growth
+			rows[i].unrunnable = len(it.GrowthLocked) + len(it.Manual)
 			if len(queued) == 0 {
 				return
 			}
@@ -503,6 +476,7 @@ func (p *Panel) buildGrowthQueue(growth bool) growthQueuePlan {
 	wg.Wait()
 
 	for i := range rows {
+		plan.unrunnable += rows[i].unrunnable
 		plan.errors = append(plan.errors, rows[i].errs...)
 		if rows[i].skip {
 			plan.skipped = append(plan.skipped, states[i].UID)
@@ -636,6 +610,8 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) growthQueueStart 
 		}
 		if len(plan.errors) > 0 {
 			res.msg = queueAbortMessage(plan.errors)
+		} else if plan.unrunnable > 0 {
+			res.msg = fmt.Sprintf("当前 0 项可自动执行，另有 %d 项需客户端操作或等待解锁", plan.unrunnable)
 		} else {
 			res.msg = "全部账号没有待办任务"
 		}
@@ -827,6 +803,14 @@ func (p *Panel) runQueueItem(a *auth.Auth, it queueItem, deps *queueDeps) queueI
 		it.Claimed = true
 		it.Message = "已完成（已领取）"
 		return it
+	case before.Locked:
+		it.Status = AutoStatusLocked
+		it.Message = "上游未解锁，未执行"
+		return it
+	case before.Checklist && !before.ReadyToClaim():
+		it.Status = AutoStatusManual
+		it.Message = autoManualReason(before)
+		return it
 	}
 
 	// 非执行类条目（锁定/需手动）即使混进队列也不跑动作，按真实状态回报。
@@ -841,8 +825,8 @@ func (p *Panel) runQueueItem(a *auth.Auth, it queueItem, deps *queueDeps) queueI
 		return it
 	}
 
-	if it.Action == scanActionClaimOnly {
-		if !before.Claimable {
+	if before.ReadyToClaim() || it.Action == scanActionClaimOnly {
+		if !before.ReadyToClaim() {
 			// 扫描时已达标、执行时状态已变化：不能凭「曾经达标」写 done。
 			it.Status = AutoStatusUnverified
 			it.Message = "扫描时已达标，执行时状态已变化（未证实完成）"
@@ -898,7 +882,7 @@ func (p *Panel) runQueueItem(a *auth.Auth, it queueItem, deps *queueDeps) queueI
 
 	// 达标即自动领奖（mp 任务走 mp 口径）；领奖失败不掩盖「已完成」，
 	// 但必须留痕（message 追加失败原因）。
-	if status == AutoStatusDone && after != nil && after.Claimable && !after.Claimed {
+	if status == AutoStatusDone && after != nil && after.ReadyToClaim() {
 		credit, energy, cerr := deps.claim(a, isMP, code)
 		if cerr == nil {
 			it.Claimed = true
@@ -951,7 +935,8 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 	}
 	var codes []string
 	for _, t := range tasks {
-		if !t.Claimed && !t.Locked && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
+		if scanActionFor(t) == scanActionAuto && !t.Claimed &&
+			t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
 			codes = append(codes, t.TaskCode)
 		}
 	}

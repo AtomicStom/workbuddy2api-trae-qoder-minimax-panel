@@ -113,19 +113,14 @@ func TestGrowthManual(t *testing.T) {
 	if growthManual(upstream.Task{TaskCode: "chat_5", Target: 5, Current: 2}) {
 		t.Error("有自动动作的任务不应落 Manual 桶")
 	}
-	// 国际版成长路径 5 项：其中 4 项后续补上了自动动作（autoActions 的 Attempt 项），
-	// 因此归「可自动化」桶而不再落 Manual；仅 wechat_linked 仍无自动动作 → Manual。
-	for _, code := range []string{"first_chat", "skill_installed", "expert_summoned", "template_used"} {
+	for _, code := range []string{"first_chat", "skill_installed", "expert_summoned", "template_used", "wechat_linked"} {
 		tk := upstream.Task{TaskCode: code, Checklist: true}
-		if growthManual(tk) {
-			t.Errorf("国际版清单任务 %s 已有自动动作，不应落 Manual 桶", code)
+		if !growthManual(tk) || scanActionFor(tk) != scanActionClient {
+			t.Errorf("国际版清单任务 %s 应保留客户端指引", code)
 		}
-		if !growthPending(tk) {
-			t.Errorf("国际版清单任务 %s 有自动动作且未领取，应落 Pending 桶", code)
+		if growthPending(tk) || autoActionFor(code) != nil {
+			t.Errorf("国际版清单任务 %s 未达标时不应触发自动执行", code)
 		}
-	}
-	if !growthManual(upstream.Task{TaskCode: "wechat_linked", Checklist: true}) {
-		t.Error("wechat_linked 无自动动作，应落 Manual 桶")
 	}
 	// 互斥性：任一未完成任务恰好落入三桶之一。
 	all := []upstream.Task{

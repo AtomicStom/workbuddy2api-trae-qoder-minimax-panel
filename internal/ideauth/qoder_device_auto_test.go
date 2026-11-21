@@ -128,6 +128,15 @@ func TestQoderEgressLegacyRealMigratedToAuto(t *testing.T) {
 	if got := eg.Profiles["b@test.com"].DeviceMode; got != QoderDeviceModeReal {
 		t.Errorf("配了代理的条目应保留手动值 real，实际 %q", got)
 	}
+	if _, err := SetQoderEgress("a@test.com", QoderDeviceModeReal, "", QoderProfileDirName("a@test.com")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureQoderEgress(); err != nil {
+		t.Fatal(err)
+	}
+	if got := QoderEgressFor("a@test.com").DeviceMode; got != QoderDeviceModeReal {
+		t.Errorf("明确保存的 real 应保留，实际 %q", got)
+	}
 }
 
 // TestQoderEgressIndependentUnderAuto 锁死 auto 模式下的「独立出口」判定：

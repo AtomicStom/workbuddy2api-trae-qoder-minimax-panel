@@ -87,6 +87,21 @@ type Task struct {
 	Checklist bool   `json:"checklist,omitempty"`
 }
 
+// ReadyToClaim accepts both progress counters and upstream completion states.
+func (t Task) ReadyToClaim() bool {
+	if t.Claimed || t.Locked {
+		return false
+	}
+	if t.Claimable || (t.Target > 0 && t.Current >= t.Target) {
+		return true
+	}
+	if t.Checklist {
+		return t.Status == "complete" || t.Status == "completed"
+	}
+	return t.Target == 0 && t.AcceptStatus == "completed" &&
+		(t.HasReward || t.Credit > 0 || t.Energy > 0 || t.RewardBuddy)
+}
+
 // GrowthProfile 国际版成长路径总览（GET /v2/activity/growth/profile）。
 // 国服无此端点（404），仅国际版账号可查；用于展示「已完成 x/5 · 等级 n」。
 type GrowthProfile struct {
@@ -312,7 +327,11 @@ func (t taskWire) toTask() Task {
 	if checklist && t.Status == "claimed" {
 		claimed = true // 国际版把「已领取」放在 status 里
 	}
-	return Task{
+	jumpURL := t.JumpURL
+	if jumpURL == "" {
+		jumpURL = t.URL
+	}
+	task := Task{
 		TaskCode:     code,
 		Title:        t.Title,
 		Description:  t.Description,
@@ -323,20 +342,21 @@ func (t taskWire) toTask() Task {
 		RewardBuddy:  t.RewardBuddy,
 		TaskType:     t.TaskType,
 		Tag:          t.Tag,
-		JumpURL:      t.JumpURL,
+		JumpURL:      jumpURL,
 		Locked:       t.Locked,
 		UnlockAt:     t.UnlockAt,
 		Target:       tgt,
 		Current:      cur,
 		AcceptStatus: t.AcceptStatus,
 		Status:       t.Status,
-		Claimable:    !claimed && tgt > 0 && cur >= tgt,
 		Claimed:      claimed,
 		TaskID:       t.TaskID,
 		LevelName:    t.LevelName,
 		URL:          t.URL,
 		Checklist:    checklist,
 	}
+	task.Claimable = task.ReadyToClaim()
+	return task
 }
 
 // parseGrowthTasks 解析 growth 任务列表 data.tasks[]（默认口径，供既有测试与

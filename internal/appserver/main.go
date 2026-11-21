@@ -512,9 +512,7 @@ func Run() {
 	// Qoder 设备/出口配置自动补全（2026-11-14）：号池里每有一个账号就自动
 	// 生成一条 egress（device_mode=auto + 按邮箱隔离的浏览器 profile 目录），
 	// 用户不再需要手动去「设备/出口」弹窗里逐个配。
-	// auto 模式下实际生效的设备由号池顺序自动分配：第一个号 real（与客户端
-	// 运行时身份一致），其余 derived（按邮箱派生，彼此不同）——
-	// 保证「同一台机器上多个号」不会共用同一套设备指纹。
+	// auto 使用本机设备，每个账号的浏览器会话按邮箱保存在各自目录。
 	if n, err := ideauth.EnsureQoderEgress(); err != nil {
 		log.Printf("[qoder] 启动自动补全设备/出口配置失败（不影响签到）：%v", err)
 	} else if n > 0 {

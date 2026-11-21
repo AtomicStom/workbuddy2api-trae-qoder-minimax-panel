@@ -45,18 +45,9 @@ func (p *Panel) accountTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 合并小程序口径任务（school_season / Sequential_Tasks_1 等仅在 mp 头列表下发）。
-	// mp 列表是默认口径的超集（实测含常规任务），按 task_code 去重；失败静默。
-	// 注意：国际版两个口径返回同一份清单型任务（已实测），去重后不会重复。
-	if mpTasks, mpErr := p.cfg.Upstream.ListTasksMP(a); mpErr == nil {
-		seen := map[string]bool{}
-		for _, t := range tasks {
-			seen[t.TaskCode] = true
-		}
-		for _, t := range mpTasks {
-			if !seen[t.TaskCode] {
-				tasks = append(tasks, t)
-				seen[t.TaskCode] = true
-			}
+	if !a.IsGlobal() {
+		if mpTasks, mpErr := p.cfg.Upstream.ListTasksMP(a); mpErr == nil {
+			tasks = mergeTaskSnapshot(tasks, mpTasks)
 		}
 	}
 	// 清单型（国际版成长路径）：没有「接受」这一步，前端要换一套渲染。
@@ -238,7 +229,7 @@ func checklistSummary(tasks []upstream.Task) (bool, int) {
 			continue
 		}
 		checklist = true
-		if !t.Claimed && t.Status != "claimed" && t.Status != "completed" {
+		if !t.Claimed && !t.ReadyToClaim() {
 			pending++
 		}
 	}

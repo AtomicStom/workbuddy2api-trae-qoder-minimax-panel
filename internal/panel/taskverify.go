@@ -80,14 +80,14 @@ func classifyAutoOutcome(before, after *upstream.Task, runErr error) (status str
 }
 
 // autoTaskCompletedStatus 目标条数为 0 的任务是否已由上游状态字面宣布完成。
-// 只认契约列出的三个取值，避免把任意 "success" 之类词当成完成。
+// 只认上游的完成状态。
 func autoTaskCompletedStatus(t *upstream.Task) bool {
 	switch t.AcceptStatus {
 	case "completed":
 		return true
 	}
 	switch t.Status {
-	case "complete", "claimed":
+	case "complete", "completed", "claimed":
 		return true
 	}
 	return false

@@ -350,19 +350,6 @@ func (p *Panel) qoderCheckinStatus(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []ideauth.QoderScanAccount{}
 	}
-	claimed, claimable, pending, bad := 0, 0, 0, 0
-	for _, it := range results {
-		switch it.Phase {
-		case "claimed":
-			claimed++
-		case "claimable":
-			claimable++
-		case "pending":
-			pending++
-		default:
-			bad++
-		}
-	}
 	// 当前登录账号（客户端登录态）的实时状态：供「号池为空但本机已登录」的展示。
 	//
 	// checked_in_today **只认上游**：phase=claimed 表示上游活动列表里今天的
@@ -378,6 +365,29 @@ func (p *Panel) qoderCheckinStatus(w http.ResponseWriter, r *http.Request) {
 		oc["checked_in_today"] = ph == "claimed" ||
 			(ph != "claimable" && ideauth.CheckinRecordTrusted("qoder", a.User.Email))
 		cur = oc
+	}
+	// 当桌面会话确认有可领活动时，补全同一账号仍显示待核实的号池结果。
+	// 号池已确认的领取记录和服务端给出的额度归属优先。
+	currentEmail, _ := cur["email"].(string)
+	claimed, claimable, pending, bad := 0, 0, 0, 0
+	for i := range results {
+		it := &results[i]
+		if it.Phase == "pending" && !it.CheckedInToday && !it.DeviceQuotaUsed &&
+			currentEmail != "" && strings.EqualFold(it.Email, currentEmail) && cur["phase"] == "claimable" {
+			it.Phase = "claimable"
+			it.Msg = "当前 Qoder 客户端会话确认有可领取的签到活动"
+			it.Source = "client_session"
+		}
+		switch it.Phase {
+		case "claimed":
+			claimed++
+		case "claimable":
+			claimable++
+		case "pending":
+			pending++
+		default:
+			bad++
+		}
 	}
 	// 顶层 checked_in_today 与 POST checkin **同义**：只有**所有**账号今天都
 	// 真领到/已领才为 true（扫描结果没有 already 相，claimed 即已领）。
@@ -599,7 +609,11 @@ func (p *Panel) qoderEgressSet(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "profile": prof})
+	apiCacheClear()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "profile": prof,
+		"effective_device_mode": ideauth.QoderEffectiveDeviceMode(prof.Email, prof.DeviceMode),
+	})
 }
 
 // qoderEgressResetAuto 一键把号池所有账号的设备模式恢复为「自动分配」。
@@ -611,6 +625,7 @@ func (p *Panel) qoderEgressResetAuto(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "qoder_egress_reset_failed: "+err.Error())
 		return
 	}
+	apiCacheClear()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "changed": n})
 }
 

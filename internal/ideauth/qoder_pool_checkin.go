@@ -605,7 +605,7 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 		// 本号今天根本没有活动可领，落 pending（契约明确要求）。
 		if res.Phase == QoderPhaseFailed && qoderIsGrantNotFound(res.Msg) {
 			res.Phase = QoderPhasePending
-			res.Msg = "上游未下发活动实例（claim_campaigns=0，claim 返回 404 GRANT_NOT_FOUND）"
+			res.Msg = "面板未找到可领取的活动实例（GRANT_NOT_FOUND）"
 		}
 
 		if res.Phase == QoderPhasePending {
@@ -1246,7 +1246,7 @@ func qoderItemFromResult(it qoderPoolItem, res *QoderCheckinResult, rank, group 
 	// T5 口径：上游没有下发活动实例（claim_campaigns=0）的号落 pending，文案必须
 	// 让用户一眼看出「不是我签失败了，是服务端今天没给这个号发活动」。
 	if phase == QoderPhasePending && !strings.Contains(item.Msg, "claim_campaigns") {
-		item.Msg = "上游未下发活动实例（claim_campaigns=0）：" + strings.TrimSpace(item.Msg)
+		item.Msg = "当前未查到可领活动：" + strings.TrimSpace(item.Msg)
 	}
 	item.Strategy = qoderStrategySnapshot(item.Email, phase, item.QuotaTakenBy, group, verdict, probeConclusion)
 	// 本轮若真领到，last_claimed_at 就用本次的上游时刻（它就是最近一次）。

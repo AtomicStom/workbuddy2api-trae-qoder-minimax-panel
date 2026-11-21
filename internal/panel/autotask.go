@@ -46,14 +46,7 @@ type autoAction struct {
 	TaskCode string // 目标任务 code
 	Desc     string // 展示用说明
 	Attempt  bool   // true = 尝试型（上游未证实可脚本化，跑了可能不点亮）
-	// ClientOnly 标记「必须在官方客户端完成」的动作（国际版成长路径 checklist）。
-	//
-	// 语义（2026-11-17 实测）：这类任务面板**不做完成承诺**——面板按客户端口径
-	// 上报事件（上游返回成功），但服务端计分另有判据，实测纯 API 点不亮。
-	// 因此扫描结果里归入「需在客户端完成」分类并逐项给出操作指引，用户在客户端
-	// 做完后面板回读自动核销。禁止把它们标成「可自动执行」——那是虚假承诺。
-	ClientOnly bool
-	run        func(p *Panel, a *auth.Auth) (string, error)
+	run      func(p *Panel, a *auth.Auth) (string, error)
 }
 
 // autoActions 已实现的任务动作表（顺序即执行顺序：先解锁依赖项）。
@@ -189,46 +182,6 @@ var autoActions = []autoAction{
 		TaskCode: "Sequential_Tasks_7",
 		Desc:     "体验灵感功能（预留，疑 PC 口径 +500c+5e）：accept → 灵感事件组（PC+mp 双形态）→ 领奖（判据待解锁验证）",
 		run:      runSequentialPlaybook,
-	},
-	// —— WorkBuddy 国际版「成长路径」checklist 口径（workbuddy.ai）——
-	// 这 5 项以 checklist 形态下发（level_name 非空）。
-	//
-	// ⚠️ 2026-11-17 实测（推翻 10-15 旧结论）：
-	//   旧结论说「4 项动作均上报成功但进度未变化」——**当时的上报根本没被上游接收**：
-	//   国际版 report 端点缺 reportDelay/timestamp 直接 400 丢弃（10001）。
-	//   该坑已修（upstream.desktopFingerprint 补齐两字段）+ 事件口径改为客户端原样
-	//   （任务码即 eventCode + 真实业务字段 + 双通道 /v2/report 与 /llm/data/report）。
-	//   修通后实测：两条通道均返回成功，但 status 仍 available、profile completed=0/5
-	//   —— 服务端计分另有判据，纯 API 点不亮。
-	//   故：这 5 项标 ClientOnly（面板不承诺完成），逐项给客户端操作指引，
-	//   用户在客户端做完后面板回读核销。
-	{
-		TaskCode:   "first_chat",
-		Desc:       "国际版成长路径·完成一次对话（客户端口径上报 chat_response_complete；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
-		Attempt:    true,
-		ClientOnly: true,
-		run:        runIntlFirstChat,
-	},
-	{
-		TaskCode:   "template_used",
-		Desc:       "国际版成长路径·使用一次模板（客户端口径上报 template_used；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
-		Attempt:    true,
-		ClientOnly: true,
-		run:        runIntlTemplateUsed,
-	},
-	{
-		TaskCode:   "expert_summoned",
-		Desc:       "国际版成长路径·召唤一次专家（取真实市场专家 id 后按客户端口径上报 expert_summoned；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
-		Attempt:    true,
-		ClientOnly: true,
-		run:        runIntlExpertSummoned,
-	},
-	{
-		TaskCode:   "skill_installed",
-		Desc:       "国际版成长路径·完成技能安装（客户端口径上报 skill_installed；实测服务端仍未计分，需在 WorkBuddy 客户端完成）",
-		Attempt:    true,
-		ClientOnly: true,
-		run:        runIntlSkillInstalled,
 	},
 }
 
@@ -822,6 +775,10 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	isMP := isMPTaskCode(act.TaskCode)
 	if before.Claimed {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "message": "该任务已领取过奖励"})
+		return
+	}
+	if before.Checklist {
+		writeErr(w, http.StatusNotImplemented, autoManualReason(before))
 		return
 	}
 	// 未解锁（Sequential 族链条每日零点解锁下一环）：上游 accept 返 200 但不落账，
@@ -1713,6 +1670,14 @@ func buildAutoPlan(snapshot []upstream.Task, actions []autoAction, actionFor fun
 		act := actionFor(t.TaskCode)
 		item := autoPlanItem{code: t.TaskCode, desc: autoTaskDesc(t, act), before: &snapshot[i], act: act}
 		switch {
+		case t.ReadyToClaim():
+			item.action = scanActionClaimOnly
+			item.claimOnly = true
+			claims = append(claims, item)
+		case t.Checklist:
+			item.action = scanActionClient
+			item.manual = true
+			manuals = append(manuals, item)
 		case t.Locked && act != nil:
 			item.action = "locked_auto"
 			item.locked = true
@@ -1722,19 +1687,8 @@ func buildAutoPlan(snapshot []upstream.Task, actions []autoAction, actionFor fun
 			item.action = "manual"
 			item.manual = true
 			manuals = append(manuals, item)
-		case t.Target > 0 && t.Current >= t.Target:
-			// 已达标未领取：无需再跑动作，直接领奖（含无自动动作的任务）。
-			item.action = "claim_only"
-			item.claimOnly = true
-			claims = append(claims, item)
 		case act != nil:
-			if act.ClientOnly {
-				// 国际版成长路径：仍执行（按客户端口径上报 + 回读核销），
-				// 但对外展示为「需在客户端完成」，不承诺能自动点亮。
-				item.action = "client"
-			} else {
-				item.action = "auto"
-			}
+			item.action = scanActionAuto
 			autos = append(autos, item)
 		default:
 			item.action = "manual"
@@ -1775,6 +1729,9 @@ func autoManualReason(t *upstream.Task) string {
 	}
 	if t.Locked {
 		return "上游未解锁且无自动动作，需真实操作"
+	}
+	if hint := upstream.IntlChecklistClientHint[t.TaskCode]; t.Checklist && hint != "" {
+		return hint
 	}
 	if s := strings.TrimSpace(t.TaskDesc); s != "" {
 		return s
@@ -1828,7 +1785,7 @@ func (p *Panel) runPlanAction(a *auth.Auth, deps *autoRunDeps, it autoPlanItem, 
 
 	// 进度达标即自动领奖（mp 任务走 mp 口径）。领奖失败不掩盖「任务已完成」，
 	// 但必须留下 claim_error 供前端提示。
-	if status == AutoStatusDone && after != nil && after.Claimable && !after.Claimed {
+	if status == AutoStatusDone && after != nil && after.ReadyToClaim() {
 		credit, energy, cerr := deps.claim(a, isMPTaskCode(it.code), it.code)
 		if cerr == nil {
 			item["claimed"] = true

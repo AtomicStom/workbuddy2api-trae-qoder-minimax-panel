@@ -738,21 +738,17 @@ func qoderCheckinAuth(auth *QoderAuth, dev *QoderDevice, scope string) (res *Qod
 	}
 	res.Base = base
 
-	// 解析（活动列表可能在 data 或顶层）
-	var top qoderCampaignsData
-	if json.Unmarshal(raw, &top) != nil || len(top.Campaigns) == 0 {
-		var wrap struct {
-			Data qoderCampaignsData `json:"data"`
-		}
-		if json.Unmarshal(raw, &wrap) == nil {
-			top = wrap.Data
-		}
+	campaigns := qoderCampaignsOf(raw)
+	if campaigns == nil {
+		res.Phase = "error"
+		res.Msg = "Qoder 活动接口未返回有效的活动列表"
+		return res, newAccess, newRefresh
 	}
-	res.Total = len(top.Campaigns)
+	res.Total = len(campaigns)
 
 	var claimable []QoderCampaign
 	var claimedToday, staleClaimed *QoderCampaign
-	claimable, claimedToday, staleClaimed = qoderClassifyCampaigns(top.Campaigns)
+	claimable, claimedToday, staleClaimed = qoderClassifyCampaigns(campaigns)
 	if len(claimable) == 0 {
 		if claimedToday != nil {
 			// 只有「今天下发的活动」已领取才算是真·已签。昨天的陈旧活动
@@ -769,11 +765,11 @@ func qoderCheckinAuth(auth *QoderAuth, dev *QoderDevice, scope string) (res *Qod
 			// 列表里只有昨天已领的签到活动：今天的还没下发（10:00 刷新）。
 			// 绝不能把它当成「今日已领取」写进本地记录 —— 那正是每天误报已签的根因。
 			res.Phase = "pending"
-			res.Msg = "今日签到活动尚未下发（Qoder 每天 10:00 后刷新；后台每 30 分钟自动重试）"
+			res.Msg = "活动列表只返回了过往的签到记录，当前领取状态待核实"
 			return res, newAccess, newRefresh
 		}
 		res.Phase = "pending"
-		res.Msg = "活动尚未下发（Qoder 每天 10:00 后陆续放出；后台每 30 分钟自动重试）"
+		res.Msg = "面板未查到可领活动，请在该账号的 Qoder 客户端确认"
 		return res, newAccess, newRefresh
 	}
 
@@ -934,9 +930,10 @@ type qoderScanOutcome struct {
 
 // qoderScanAuth 用指定登录态做一次「只查不领」的上游核实（多 base + 续期重试）。
 func qoderScanAuth(auth *QoderAuth, dev *QoderDevice, scope string) qoderScanOutcome {
-	out := qoderScanOutcome{result: &QoderCheckinResult{
-		Email: auth.User.Email, Name: auth.User.Name, UID: auth.User.ID,
-	}}
+	out := qoderScanOutcome{result: &QoderCheckinResult{}}
+	if auth != nil {
+		out.result.Email, out.result.Name, out.result.UID = auth.User.Email, auth.User.Name, auth.User.ID
+	}
 	if auth == nil || (auth.Token == "" && auth.RefreshToken == "") {
 		out.result.Phase = "login_required"
 		out.result.Msg = "该账号没有可用凭证"
@@ -961,65 +958,54 @@ func qoderScanAuth(auth *QoderAuth, dev *QoderDevice, scope string) qoderScanOut
 		}
 	}
 
-	lastErr := ""
-	authorized := false
-	emptyOK := false
 	var campaigns []QoderCampaign
+	unauthorized := 0
 	// 每个 base 的失败原因都要留档：只留最后一个会把「国际服网络失败」显示成
 	// 「国内服 401 token 失效」，把用户引到完全错误的方向上。
 	var baseErrs []string
 	for _, b := range qoderOpenAPIBaseListForScope(scope) {
 		st, raw, err := qoderDo(b, qoderPathCampaigns, http.MethodGet, token, nil, dev)
+		if err == nil && st == http.StatusUnauthorized {
+			if nt, nrt, ok := qoderRefreshToken(auth, b, dev); ok {
+				token = nt
+				out.result.Refreshed = true
+				out.newAccess, out.newRefresh = nt, nrt
+				auth.Token, auth.RefreshToken = nt, nrt
+				st, raw, err = qoderDo(b, qoderPathCampaigns, http.MethodGet, token, nil, dev)
+			}
+		}
 		if err != nil {
-			lastErr = err.Error()
 			baseErrs = append(baseErrs, b+" 连接失败: "+err.Error())
 			continue
 		}
-		if st == http.StatusUnauthorized {
-			if nt, nrt, ok := qoderRefreshToken(auth, b, dev); ok {
-				st2, rw2, err2 := qoderDo(b, qoderPathCampaigns, http.MethodGet, nt, nil, dev)
-				if err2 == nil && st2 == http.StatusOK {
-					token = nt
-					out.result.Refreshed = true
-					out.newAccess, out.newRefresh = nt, nrt
-					// 本次续期已消费旧 RT：同步回写，防止调用内后续分支重复消费。
-					auth.Token, auth.RefreshToken = nt, nrt
-					campaigns = qoderCampaignsOf(rw2)
-					out.result.Base = b
-					authorized = true
-					break
-				}
-			}
-			lastErr = "401 @ " + b
-			baseErrs = append(baseErrs, b+" HTTP 401（token 失效）")
-			continue
-		}
 		if st != http.StatusOK {
-			baseErrs = append(baseErrs, fmt.Sprintf("%s HTTP %d: %s", b, st, truncateStr(string(raw), 120)))
+			if st == http.StatusUnauthorized {
+				unauthorized++
+			}
+			baseErrs = append(baseErrs, fmt.Sprintf("%s HTTP %d", b, st))
 			continue
 		}
-		// 200：空列表也接受（可能领完即删 / 未下发），但要继续试下一个 base 是否有货。
 		cs := qoderCampaignsOf(raw)
-		if len(cs) > 0 {
+		if cs == nil {
+			baseErrs = append(baseErrs, b+" 未返回有效的活动列表")
+			continue
+		}
+		if campaigns == nil || (len(campaigns) == 0 && len(cs) > 0) {
 			campaigns = cs
 			out.result.Base = b
-			authorized = true
+		}
+		if available, claimed, _ := qoderClassifyCampaigns(cs); len(available) > 0 || claimed != nil {
+			campaigns = cs
+			out.result.Base = b
 			break
 		}
-		if !emptyOK {
-			out.result.Base = b
-			emptyOK = true
-		}
 	}
-	if !authorized && emptyOK {
-		authorized = true
-	}
-	if !authorized {
-		out.result.Phase = "login_required"
-		if len(baseErrs) > 0 {
-			out.result.Msg = "上游不可达或凭证失效：" + strings.Join(baseErrs, "；")
-		} else {
-			out.result.Msg = "token 无效或无法连接（" + lastErr + "）"
+	if campaigns == nil {
+		out.result.Phase = "error"
+		out.result.Msg = "无法核实签到状态：" + strings.Join(baseErrs, "；")
+		if unauthorized > 0 && unauthorized == len(baseErrs) {
+			out.result.Phase = "login_required"
+			out.result.Msg = "签到查询凭证已失效，请重新登录该账号"
 		}
 		return out
 	}
@@ -1047,10 +1033,10 @@ func qoderScanAuth(auth *QoderAuth, dev *QoderDevice, scope string) qoderScanOut
 	case staleClaimed != nil:
 		// 只有昨天的已领活动：今天的还没下发。这不是「已签」。
 		out.result.Phase = "pending"
-		out.result.Msg = "今日签到活动尚未下发（Qoder 每天 10:00 后刷新）"
+		out.result.Msg = "活动列表只返回了过往的签到记录，当前领取状态待核实"
 	default:
 		out.result.Phase = "pending"
-		out.result.Msg = "未观察到每日签到活动（已领完即删或尚未下发）"
+		out.result.Msg = "面板未查到可领活动，请在该账号的 Qoder 客户端确认"
 	}
 	return out
 }
@@ -1324,16 +1310,19 @@ func qoderAuthExpired(auth *QoderAuth) bool {
 // qoderCampaignsOf 解析活动列表（兼容 data 包裹与顶层两种形态）。
 func qoderCampaignsOf(raw []byte) []QoderCampaign {
 	var top qoderCampaignsData
-	if json.Unmarshal(raw, &top) == nil && len(top.Campaigns) > 0 {
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil
+	}
+	if len(top.Campaigns) > 0 {
 		return top.Campaigns
 	}
 	var wrap struct {
 		Data qoderCampaignsData `json:"data"`
 	}
-	if json.Unmarshal(raw, &wrap) == nil {
+	if json.Unmarshal(raw, &wrap) == nil && wrap.Data.Campaigns != nil {
 		return wrap.Data.Campaigns
 	}
-	return nil
+	return top.Campaigns
 }
 
 // QoderDeviceForEmail 按账号解析设备指纹与出口（契约 C-QD-DEVICE@1）。

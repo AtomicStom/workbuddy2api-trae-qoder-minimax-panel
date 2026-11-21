@@ -118,6 +118,7 @@ func TestQoderScanUpstreamTruth(t *testing.T) {
 		"tok-signed": todayCampaignJSON("CLAIMED"),
 		"tok-open":   todayCampaignJSON("CLAIMABLE"),
 		"tok-none":   `{"campaigns":[]}`,
+		"tok-bad":    `{"message":"campaign data unavailable"}`,
 	})
 	t.Setenv("QODER_OPENAPI_BASE", srv.URL)
 
@@ -125,11 +126,12 @@ func TestQoderScanUpstreamTruth(t *testing.T) {
 		snap("signed@x.com", "tok-signed"),
 		snap("open@x.com", "tok-open"),
 		snap("none@x.com", "tok-none"),
+		snap("bad@x.com", "tok-bad"),
 	)
 
 	rows := QoderPoolScan(nil)
-	if len(rows) != 3 {
-		t.Fatalf("应有 3 行，得到 %d", len(rows))
+	if len(rows) != 4 {
+		t.Fatalf("应有 4 行，得到 %d", len(rows))
 	}
 	byEmail := map[string]QoderScanAccount{}
 	for _, r := range rows {
@@ -156,8 +158,11 @@ func TestQoderScanUpstreamTruth(t *testing.T) {
 
 	// 上游没有今日活动 → 没签
 	r = byEmail["none@x.com"]
-	if r.CheckedInToday {
+	if r.Phase != QoderPhasePending || r.CheckedInToday {
 		t.Errorf("none@x.com：上游 phase=pending，不该判已签到")
+	}
+	if r = byEmail["bad@x.com"]; r.Phase != QoderPhaseError || r.CheckedInToday {
+		t.Errorf("活动列表缺失应报查询错误，实际 phase=%q checked=%v", r.Phase, r.CheckedInToday)
 	}
 }
 

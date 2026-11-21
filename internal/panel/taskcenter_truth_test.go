@@ -412,7 +412,7 @@ func TestTaskCenterScanBucketsInvariant(t *testing.T) {
 func TestTaskCenterQueueIncludesGlobal(t *testing.T) {
 	const bodyGlobal = `{"code":0,"msg":"OK","data":{"tasks":[` +
 		`{"code":"first_chat","level_name":"养虾尝试","status":"available"},` +
-		`{"code":"skill_installed","level_name":"养虾尝试","status":"available"}]}}`
+		`{"code":"skill_installed","level_name":"养虾尝试","status":"completed"}]}}`
 
 	log := newTaskCallLog()
 	srv := newTaskTestServer(t, log, func(uid, platform string) (int, string) {
@@ -430,8 +430,8 @@ func TestTaskCenterQueueIncludesGlobal(t *testing.T) {
 	p.cfg.Pool.Disable("u-dis", "test")
 
 	plan := p.buildGrowthQueue(true)
-	if len(plan.items) == 0 {
-		t.Fatal("队列 items 为空：global 账号的 checklist 必须入队")
+	if len(plan.items) != 1 || plan.items[0].Code != "skill_installed" || plan.unrunnable != 1 {
+		t.Fatalf("global 队列只应包含已达标的领奖任务，实际 items=%+v, unrunnable=%d", plan.items, plan.unrunnable)
 	}
 	for _, it := range plan.items {
 		if it.UID != "u-global" {
@@ -444,8 +444,8 @@ func TestTaskCenterQueueIncludesGlobal(t *testing.T) {
 		//（原文保留）：`if it.Action != scanActionAuto { ... want auto }`。
 		// 现分类为 client：面板按客户端口径上报并回读，但不承诺能自动点亮
 		// （服务端计分另有判据，实测纯 API 点不亮）。
-		if it.Action != scanActionClient {
-			t.Errorf("条目 %s action=%q want client", it.Code, it.Action)
+		if it.Action != scanActionClaimOnly {
+			t.Errorf("条目 %s action=%q want %q", it.Code, it.Action, scanActionClaimOnly)
 		}
 		if it.Status != queueStatusPending {
 			t.Errorf("条目 %s status=%q want pending", it.Code, it.Status)
