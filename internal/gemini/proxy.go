@@ -134,7 +134,7 @@ func normalizeProxyScheme(scheme, addr string) string {
 }
 
 // proxyFunc 返回可挂到 http.Transport.Proxy 上的函数。
-// proxyURL 为空 → 直连（返回 nil）。
+// proxyURL 为空或目标为本地回环（127.0.0.1/localhost）时直连。
 func proxyFunc(proxyURL string) func(*http.Request) (*url.URL, error) {
 	if proxyURL == "" {
 		return nil
@@ -143,7 +143,15 @@ func proxyFunc(proxyURL string) func(*http.Request) (*url.URL, error) {
 	if err != nil {
 		return nil
 	}
-	return http.ProxyURL(u)
+	return func(req *http.Request) (*url.URL, error) {
+		if req != nil && req.URL != nil {
+			h := req.URL.Hostname()
+			if h == "127.0.0.1" || h == "localhost" || h == "::1" {
+				return nil, nil
+			}
+		}
+		return u, nil
+	}
 }
 
 // DescribeProxy 给日志用的一行描述。
