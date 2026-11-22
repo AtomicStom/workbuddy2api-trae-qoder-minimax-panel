@@ -1,5 +1,60 @@
 # 变更日志
 
+## 2026-11-22（v1.15.12-panel）
+
+### 修复三连：豆包不能签到 / Qoder 只签到一个 / 一键签到非常慢
+
+**① 豆包不能签到 → 根因是出口地区（实测定案）**
+
+两个号都签不上时抓包看到：活动页显示「该页面暂时不可用」、
+`POST /alice/ug/campaign/v3/detail/` 返回 `campaign not found`、`landing/get` 返回
+710010702 system error。用 `myip.ipip.net` 预检发现本机出口是
+`107.149.161.250（美国 加利福尼亚州 圣何塞）` —— 豆包签到活动**仅对中国大陆开放**，
+海外出口下页面必死，跟 Cookie / UA 都无关（UA 仍随客户端升到 2.35.12）。
+
+改动（`internal/panel/ide_doubao.go`）：
+
+- 新增 `doubaoProbeEgress()`（2 分钟缓存）：出口非中国大陆时直接返回新相
+  `region_blocked`，说明当前出口 IP/地区与改法（切回中国大陆出口），**不再为每个号
+  白启动一次无头浏览器干等 60 秒**；
+- 页面扫描循环里检测「该页面暂时不可用」→ 立即退出并附出口信息，不等满 60 秒
+  （预检失败时的兜底路径）；
+- 多账号签到/状态核实从逐号串行改为**并发 2**（每号独立 goroutine + 独立浏览器
+  + 独立调试端口）；去掉全局 `doubaoCDPMu` 锁，新增 `doubaoPortMu` 只串行化
+  「选端口 → 启动 Chrome → 端口绑定」这一小段（freePort 是 TOCTOU，两个并发会话
+  可能挑中同一端口）。
+
+**② Qoder「只能签到一个」→ 同一台物理设备每天只发一份额度，如实点名占用者**
+
+实测（11-19 起）：QQ 号当天真领到（本地可信记录 17:59），gmail 号从 11-19 起连续
+pending——上游对**后来账号隐藏当天活动**（不报错、不 401、不回 SAME_PERSON），
+面板却只显示「待核实」，后台还每 30 分钟空转重试。环境码 3/0、real/derived 全试过
+都绕不过——这不是身份问题，是设备配额问题。
+
+改动（`internal/ideauth/qoder_pool_checkin.go`）：
+
+- 新增 `QoderDeviceQuotaHolder(excludeEmail)`：双方都不走独立设备/出口、且同设备
+  另一个号今天有可信签到记录 → 返回占用者；
+- `QoderPoolScan` 的 pending 分支、`QoderCheckinPool` 的 default 与 `QoderVerdictOther`
+  分支都接入：quota_taken_by 点名 + 文案明确「同设备」而不是「同一个人」；
+- `QoderPendingEmails` 收紧：`checked_in_today=true` 或 `quota_taken_by` 非空的号
+  不再进入重试名单（重试永远不会成功，只是在烧上游请求）；
+- 前端文案从「同一人已领」统一改为「额度已被占用」，strategy 文案改为
+  「额度已被占用（同人/同设备）」——覆盖两种占用来源，不再对设备占用误称
+  「服务端判定同人」。
+
+**③ 一键签到慢 → 上面两条合起来就是答案**
+
+豆包侧：地区预检秒回（0 个浏览器实例）+ 多号并发 2 + 页面不可用快速退出，
+一键签到不再被豆包拖满 60 秒 × 账号数。Qoder 侧：重试名单清空后，30 分钟一轮的
+上游探测也停了。
+
+**测试**：`TestQoderDifferentPersonNotBlocked` / `TestQoderPersonLinkClearedWhenProbeSaysOther`
+按新契约更新——探测明确「不是同一个人」时仍不写同人 blocked，但同设备占用必须
+点名（文案必须出现「同设备」、不得出现「同一个人」）。
+
+---
+
 ## 2026-11-17（v1.15.11-panel）
 
 ### 新增：国服 `skill_share`（分享一个技能给好友）从「需人工」变为**可一键完成**

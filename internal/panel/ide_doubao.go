@@ -18,12 +18,14 @@ package panel
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -112,8 +114,8 @@ func (p *Panel) doubaoAddExtract(w http.ResponseWriter, r *http.Request) {
 	log.Printf("panel: 豆包客户端提取: %s（%s，%d 个 Cookie）", acc.Label, verb, len(cookies))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "added": added, "id": acc.ID, "label": acc.Label,
-		"msg":     verb + "：" + acc.Label + "（" + fmt.Sprintf("%d 个 Cookie", len(cookies)) + "）",
-		"note":    strings.TrimSpace(killNote + "；" + launchNote),
+		"msg":  verb + "：" + acc.Label + "（" + fmt.Sprintf("%d 个 Cookie", len(cookies)) + "）",
+		"note": strings.TrimSpace(killNote + "；" + launchNote),
 	})
 }
 
@@ -217,7 +219,11 @@ type doubaoCheckinResult struct {
 	Sample string `json:"sample,omitempty"`
 }
 
-// doubaoCheckin 签到（CDP 通道，逐账号串行 —— 每号一个无头浏览器会话）。
+// doubaoCheckin 签到（CDP 通道，并发 2 —— 每号一个无头浏览器会话）。
+//
+// 2026-11-22 起多号并行：旧实现逐号串行，每号 15-60 秒，一键签到要等全部
+// 豆包号跑完才返回。现在每号独立 goroutine + 独立浏览器/端口，并发 2
+// （Chrome 实例开太多会拖垮机器），计数与落账互斥保护。
 func (p *Panel) doubaoCheckin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IDs []string `json:"ids"`
@@ -234,8 +240,7 @@ func (p *Panel) doubaoCheckin(w http.ResponseWriter, r *http.Request) {
 			want[id] = true
 		}
 	}
-	out := make([]doubaoCheckinResult, 0, len(pool.Accounts))
-	claimed, already, failed := 0, 0, 0
+	var accs []*doubao.Account
 	for _, a := range pool.Accounts {
 		if a == nil || a.SessionID == "" {
 			continue
@@ -243,22 +248,39 @@ func (p *Panel) doubaoCheckin(w http.ResponseWriter, r *http.Request) {
 		if len(want) > 0 && !want[a.ID] {
 			continue
 		}
-		res := p.doubaoSigninOne(a)
-		switch res.Phase {
-		case "claimed":
-			claimed++
-			_ = ideauth.MarkCheckedIn("doubao", a.ID)
-		case "already":
-			already++
-			_ = ideauth.MarkCheckedIn("doubao", a.ID)
-		case "claimable":
-			// 扫到了按钮但没点成功：不标记
-			failed++
-		default:
-			failed++
-		}
-		out = append(out, res)
+		accs = append(accs, a)
 	}
+	out := make([]doubaoCheckinResult, len(accs))
+	claimed, already, failed := 0, 0, 0
+	var mu sync.Mutex
+	sem := make(chan struct{}, 2)
+	var wg sync.WaitGroup
+	for i, a := range accs {
+		wg.Add(1)
+		go func(i int, a *doubao.Account) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res := p.doubaoSigninOne(a)
+			mu.Lock()
+			defer mu.Unlock()
+			switch res.Phase {
+			case "claimed":
+				claimed++
+				_ = ideauth.MarkCheckedIn("doubao", a.ID)
+			case "already":
+				already++
+				_ = ideauth.MarkCheckedIn("doubao", a.ID)
+			case "claimable":
+				// 扫到了按钮但没点成功：不标记
+				failed++
+			default:
+				failed++
+			}
+			out[i] = res
+		}(i, a)
+	}
+	wg.Wait()
 	msg := fmt.Sprintf("本次签到 %d 个 · 今日已领 %d 个 · 失败 %d 个", claimed, already, failed)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "results": out,
@@ -275,32 +297,52 @@ func (p *Panel) doubaoSigninOne(a *doubao.Account) doubaoCheckinResult {
 	return res
 }
 
-// doubaoStatus 上游核实：无头浏览器扫活动页状态（不点击）。
+// doubaoStatus 上游核实：无头浏览器扫活动页状态（不点击，并发 2）。
 func (p *Panel) doubaoStatus(w http.ResponseWriter, r *http.Request) {
 	pool, err := doubao.LoadPool()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "doubao_pool_read_failed: "+err.Error())
 		return
 	}
-	out := make([]doubaoCheckinResult, 0, len(pool.Accounts))
+	var accs []*doubao.Account
 	for _, a := range pool.Accounts {
 		if a == nil || a.SessionID == "" {
 			continue
 		}
-		phase, msg, sample := doubaoRunInBrowser(a.Cookies, false, traeBrowserBaseDir(p))
-		res := doubaoCheckinResult{ID: a.ID, Label: a.Label, Phase: phase, Msg: msg, Sample: sample}
-		if ideauth.CheckinRecordTrusted("doubao", a.ID) && (phase == "unknown" || phase == "error") {
-			res.Phase = "already"
-			res.Msg = "上游扫描未确认（" + msg + "）；本地记录今日已签"
-		}
-		out = append(out, res)
+		accs = append(accs, a)
 	}
+	out := make([]doubaoCheckinResult, len(accs))
+	sem := make(chan struct{}, 2)
+	var wg sync.WaitGroup
+	for i, a := range accs {
+		wg.Add(1)
+		go func(i int, a *doubao.Account) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			phase, msg, sample := doubaoRunInBrowser(a.Cookies, false, traeBrowserBaseDir(p))
+			res := doubaoCheckinResult{ID: a.ID, Label: a.Label, Phase: phase, Msg: msg, Sample: sample}
+			if ideauth.CheckinRecordTrusted("doubao", a.ID) && (phase == "unknown" || phase == "error") {
+				res.Phase = "already"
+				res.Msg = "上游扫描未确认（" + msg + "）；本地记录今日已签"
+			}
+			out[i] = res
+		}(i, a)
+	}
+	wg.Wait()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": out})
 }
 
 // doubaoRunInBrowser CDP 主流程：注入 Cookie + 客户端 UA → 打开活动页 →
 // （可选）点签到按钮 → 读取页面状态。全程无窗口，约 15-40 秒。
 func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string) (phase, msg, sample string) {
+	// 出口地区预检（2 分钟缓存）：豆包签到活动仅对中国大陆开放，出口在海外时
+	// 活动页必回「该页面暂时不可用」/campaign not found。提前秒回明确原因，
+	// 不再为每个账号白启动一次无头浏览器干等 60 秒（一键签到慢的主因之一）。
+	if eg := doubaoProbeEgress(); eg.OK && !eg.Mainland {
+		return "region_blocked", "出口地区不支持：当前出口 " + eg.IP + "（" + eg.Region +
+			"）——豆包签到活动仅对中国大陆开放，请把代理/出口切到中国大陆后重试", ""
+	}
 	chrome, err := findChrome()
 	if err != nil {
 		return "error", "未找到 Chrome / Edge：" + err.Error(), ""
@@ -317,6 +359,10 @@ func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string)
 		return "error", "创建浏览器目录失败: " + err.Error(), ""
 	}
 	defer os.RemoveAll(dir)
+	// 端口分配必须串行：freePort 是「探测后关闭」的 TOCTOU——两个并发会话可能
+	// 同时挑中同一个端口，后启动的 Chrome 绑不上就整个失败。这里锁住「选端口 →
+	// 启动 → 等 Chrome 真正绑定调试端口」这一小段，之后的流程各会话完全并行。
+	doubaoPortMu.Lock()
 	cmd := exec.Command(chrome,
 		"--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
 		"--disable-extensions", "--window-size=1280,900",
@@ -325,8 +371,17 @@ func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string)
 		"about:blank",
 	)
 	if err := cmd.Start(); err != nil {
+		doubaoPortMu.Unlock()
 		return "error", "启动无头浏览器失败: " + err.Error(), ""
 	}
+	for i := 0; i < 25; i++ {
+		if c, derr := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond); derr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	doubaoPortMu.Unlock()
 	defer func() {
 		traeCloseViaCDP(port)
 		if cmd.Process != nil {
@@ -362,9 +417,6 @@ func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string)
 		return "error", "CDP 连接失败: " + err.Error(), ""
 	}
 	defer ws.Close()
-
-	doubaoCDPMu.Lock()
-	defer doubaoCDPMu.Unlock()
 
 	// 客户端 UA（活动页校验 navigator.userAgent 含 SamanthaDoubao/）。
 	_, _ = doubaoCDPCall(ws, 1, "Emulation.setUserAgentOverride",
@@ -411,6 +463,13 @@ func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string)
 		st, err := doubaoScanPage(ws, 300)
 		if err == nil {
 			last = st
+			// 活动页明确说「暂时不可用」（v3/detail 回 campaign not found）：
+			// 这是终态——继续等满 60 秒也不会变好，立即退出并给出明确原因。
+			if st.Ready && strings.Contains(st.Sample, "该页面暂时不可用") {
+				return "unknown", "豆包活动页提示「该页面暂时不可用」" + doubaoEgressHint() +
+					"——通常是出口地区不被支持（豆包活动仅对中国大陆开放）或活动已下线，无需重试等待",
+					sampleOf(last.Sample)
+			}
 			if st.Ready && (st.Already || st.Success || st.Login || st.Card != "" ||
 				(st.Btn != "" && time.Since(started) > 12*time.Second)) {
 				break
@@ -431,12 +490,13 @@ func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string)
 	}
 	// 页面上下文内直接调一次只读状态接口（带页面自己的完整会话签名，
 	// 纯站外直连会因缺设备签名被"系统错误"拦下，页内调用不受影响）。
-	if ph, det, ok := doubaoPageStatusFetch(ws, 310); ok {
-		if ph == "claimed" || ph == "already" {
-			return ph, withTasks(det, doubaoTasksIf(doClick, ws)), sampleOf(last.Sample)
+	landingPhase, landingDetail, landingOK := doubaoPageStatusFetch(ws, 310)
+	if landingOK {
+		if landingPhase == "claimed" || landingPhase == "already" {
+			return landingPhase, withTasks(landingDetail, doubaoTasksIf(doClick, ws)), sampleOf(last.Sample)
 		}
-		if !doClick && ph == "claimable" {
-			return "claimable", "今日可领取（" + det + "）", sampleOf(last.Sample)
+		if !doClick && landingPhase == "claimable" {
+			return "claimable", "今日可领取（" + landingDetail + "）", sampleOf(last.Sample)
 		}
 	}
 	if ph, det, ok := doubaoParseNet(doubaoNetResults(ws, 300)); ok {
@@ -469,7 +529,7 @@ func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string)
 			}
 			return "claimable", "今日可领取（检测到按钮：" + last.Btn + "）", hint[:min(len(hint), 6000)]
 		default:
-			return "unknown", "未识别到签到卡片（页面可能改版）", sampleOf(last.Sample)
+			return "unknown", "未识别到签到卡片（页面可能改版）" + landingHint(landingDetail), sampleOf(last.Sample)
 		}
 	}
 	// 点击签到
@@ -477,7 +537,7 @@ func doubaoRunInBrowser(cookies map[string]string, doClick bool, baseDir string)
 		return "already", "今日已签到（签到卡片已显示已签状态）", sampleOf(last.Sample)
 	}
 	if last.Btn == "" && !last.Already {
-		return "unknown", "页面上没有可点的签到按钮", sampleOf(last.Sample)
+		return "unknown", "页面上没有可点的签到按钮" + landingHint(landingDetail), sampleOf(last.Sample)
 	}
 	if last.Btn != "" {
 		clicked := ""
@@ -537,8 +597,8 @@ const doubaoNetLogJS = `(() => {
   if (window.__wb2api) return;
   window.__wb2api = [];
   const want = u => true; // 全量捕获：豆包的签到状态字段来源不定，先抓全量再在服务端筛
-  const rec = (url, status, body) => {
-    const row = { url: String(url).slice(0, 200), status, body: String(body || '') };
+  const rec = (url, status, body, req) => {
+    const row = { url: String(url).slice(0, 1000), status, body: String(body || ''), req: String(req || '').slice(0, 4000) };
     row.body = row.body.slice(0, 200000);
     try { window.__wb2api.push(row); } catch (e) {}
     // 活动接口跑在 iframe 里：镜像到顶层 window（同源），主框架读取才能看到。
@@ -551,7 +611,8 @@ const doubaoNetLogJS = `(() => {
       const res = await of.apply(this, args);
       try {
         const url = String((args[0] && args[0].url) || args[0] || '');
-        if (want(url)) { const c = res.clone(); c.text().then(t => rec(url, res.status, t)).catch(() => {}); }
+        const ini = args[1] || {};
+        if (want(url)) { const c = res.clone(); c.text().then(t => rec(url, res.status, t, ini.body)).catch(() => {}); }
       } catch (e) {}
       return res;
     };
@@ -559,13 +620,13 @@ const doubaoNetLogJS = `(() => {
   try {
     const oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function (m, u) { this.__u = u; return oo.apply(this, arguments); };
-    XMLHttpRequest.prototype.send = function () {
+    XMLHttpRequest.prototype.send = function (b) {
       this.addEventListener('load', () => {
         try {
           if (!want(this.__u)) return;
-          let b = '';
-          try { b = this.responseText; } catch (e) { try { b = JSON.stringify(this.response); } catch (e2) {} }
-          rec(this.__u, this.status, b);
+          let t = '';
+          try { t = this.responseText; } catch (e) { try { t = JSON.stringify(this.response); } catch (e2) {} }
+          rec(this.__u, this.status, t, b);
         } catch (e) {}
       });
       return os.apply(this, arguments);
@@ -578,6 +639,7 @@ type doubaoNetRow struct {
 	URL    string `json:"url"`
 	Status int    `json:"status"`
 	Body   string `json:"body"`
+	Req    string `json:"req,omitempty"`
 }
 
 // doubaoNetResults 读取钩子记录的接口响应。
@@ -596,8 +658,9 @@ func doubaoNetResults(ws *wsConn, id int) []doubaoNetRow {
 }
 
 // doubaoCheckinRe 从 v3/detail 响应里提取 daily_checkin 状态
-//（{"campaign_code":"daily_signin",...,"daily_checkin":{"checked_in_today":true,
-//   "continuous_days":1,"last_checkin_date":"2026-10-24",...}}）。
+// （{"campaign_code":"daily_signin",...,"daily_checkin":{"checked_in_today":true,
+//
+//	"continuous_days":1,"last_checkin_date":"2026-10-24",...}}）。
 var doubaoCheckinRe = regexp.MustCompile(
 	`"daily_checkin":\{"checked_in_today":(true|false),"continuous_days":(\d+),"last_checkin_date":"([^"]+)"`)
 
@@ -647,12 +710,12 @@ func doubaoPageStatusFetch(ws *wsConn, id int) (phase, detail string, ok bool) {
 		"expression": doubaoPageStatusJS, "returnByValue": true, "awaitPromise": true,
 	}, 15*time.Second)
 	if err != nil {
-		return "", "", false
+		return "", "CDP 调用失败: " + err.Error(), false
 	}
 	body := string(raw)
 	lb := strings.ToLower(body)
 	if strings.HasPrefix(lb, "fetch_err") {
-		return "", "", false
+		return "", body, false
 	}
 	if i := strings.Index(lb, `"checked_in_today"`); i >= 0 {
 		seg := lb[i:min(len(lb), i+40)]
@@ -663,21 +726,36 @@ func doubaoPageStatusFetch(ws *wsConn, id int) (phase, detail string, ok bool) {
 			return "claimable", "签到接口确认今日未签", true
 		}
 	}
-	if strings.Contains(lb, `"code":0`) && strings.Contains(body, "daily_checkin") {
-		return "", "", false // 有数据但没有 checked_in_today 字段：按改版处理，走 DOM 判据
+	return "", "HTTP " + dbgBody(body), false
+}
+
+// dbgBody 截断接口原文，供失败时的诊断文案使用。
+func dbgBody(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 600 {
+		return s[:600] + "…"
 	}
-	return "", "", false
+	return s
+}
+
+// landingHint 把 landing/get 的失败原文附在诊断文案后（没有则空串）。
+func landingHint(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+	return "（landing/get: " + sampleOf(detail) + "）"
 }
 
 // doubaoScanState 页面扫描快照。
 type doubaoScanState struct {
-	Ready   bool   `json:"ready"`
-	Btn     string `json:"btn"`
-	Already bool   `json:"already"`
-	Success bool   `json:"success"`
-	Card    string `json:"card"`
-	Login   bool   `json:"login"`
-	Sample  string `json:"sample"`
+	Ready   bool     `json:"ready"`
+	Btn     string   `json:"btn"`
+	Already bool     `json:"already"`
+	Success bool     `json:"success"`
+	Card    string   `json:"card"`
+	Login   bool     `json:"login"`
+	Sample  string   `json:"sample"`
 	Cands   []string `json:"cands,omitempty"`
 }
 
@@ -829,8 +907,77 @@ func doubaoScanPage(ws *wsConn, id int) (doubaoScanState, error) {
 	return out, nil
 }
 
-// doubaoCDPMu CDP 会话内互斥（同一 ws 的消息必须串行；多账号签到本身也串行）。
-var doubaoCDPMu sync.Mutex
+// doubaoPortMu 端口分配互斥：并发会话只在「选端口 → 启动 Chrome → 端口绑定」
+// 这一小段串行（freePort 的探测与 Chrome 绑定之间是 TOCTOU 窗口），其余流程
+// 各会话完全并行——每个会话有自己独立的 ws 与调试端口。
+var doubaoPortMu sync.Mutex
+
+// doubaoEgress 出口地区预检结果。
+type doubaoEgress struct {
+	IP       string
+	Region   string // 「美国 加利福尼亚州 圣何塞」形态
+	OK       bool   // 预检本身成功（拿到 IP 与地区）
+	Mainland bool   // 是否中国大陆出口
+}
+
+var (
+	doubaoEgressMu     sync.Mutex
+	doubaoEgressCached *doubaoEgress
+	doubaoEgressAt     time.Time
+)
+
+// doubaoProbeEgress 查当前出口 IP 与地区（缓存 2 分钟）。
+//
+// 为什么需要（2026-11-22 实测）：本机出口在美国（Clash Verge / 海外线路），
+// 豆包活动页对非中国大陆出口一律回「该页面暂时不可用」+ campaign not found。
+// 逐号无头浏览器干等 60 秒只会白白拖慢一键签到——预检失败就秒回 region_blocked，
+// 用户切回中国大陆出口后缓存过期即恢复。
+//
+// 解析「当前 IP：1.2.3.4  来自于：中国 广东 深圳」格式；预检失败按 OK=false
+// 处理（回落到浏览器流程，那里的「页面暂时不可用」检测仍会快速兜底）。
+func doubaoProbeEgress() *doubaoEgress {
+	doubaoEgressMu.Lock()
+	defer doubaoEgressMu.Unlock()
+	if doubaoEgressCached != nil && time.Since(doubaoEgressAt) < 2*time.Minute {
+		return doubaoEgressCached
+	}
+	e := &doubaoEgress{}
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Get("https://myip.ipip.net")
+	if err != nil {
+		doubaoEgressCached, doubaoEgressAt = e, time.Now()
+		return e
+	}
+	defer resp.Body.Close()
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		doubaoEgressCached, doubaoEgressAt = e, time.Now()
+		return e
+	}
+	text := string(buf)
+	if m := regexp.MustCompile(`(\d{1,3}(?:\.\d{1,3}){3})`).FindString(text); m != "" {
+		e.IP = m
+	}
+	if i := strings.Index(text, "来自于："); i >= 0 {
+		e.Region = strings.TrimSpace(text[i+len("来自于："):])
+	}
+	if e.IP != "" && e.Region != "" {
+		e.OK = true
+		// 大陆口径：国家为「中国」且不在港澳台（港澳台出口豆包同样不放行）。
+		country := strings.TrimSpace(strings.SplitN(e.Region, " ", 2)[0])
+		e.Mainland = country == "中国" || country == "CN"
+	}
+	doubaoEgressCached, doubaoEgressAt = e, time.Now()
+	return e
+}
+
+// doubaoEgressHint 出口地区附注（预检成功时附在诊断文案后）。
+func doubaoEgressHint() string {
+	if eg := doubaoProbeEgress(); eg.OK {
+		return "（当前出口：" + eg.IP + " " + eg.Region + "）"
+	}
+	return ""
+}
 
 // doubaoCDPCall 发一条 CDP 命令并等它的响应（按 id 匹配，其它事件忽略）。
 func doubaoCDPCall(ws *wsConn, id int, method string, params map[string]any, timeout time.Duration) (json.RawMessage, error) {

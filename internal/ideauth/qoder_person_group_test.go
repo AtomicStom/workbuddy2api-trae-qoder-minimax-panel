@@ -207,10 +207,19 @@ func TestQoderDifferentPersonNotBlocked(t *testing.T) {
 	}
 	b := by["b@x.com"]
 	if b.Phase == "blocked" {
-		t.Errorf("b@x.com：不是同一个人，不该被判成额度被领走，实际 phase=%s msg=%q", b.Phase, b.Msg)
+		t.Errorf("b@x.com：不是同一个人，不该被判成同人 blocked，实际 phase=%s msg=%q", b.Phase, b.Msg)
 	}
-	if b.QuotaTakenBy != "" {
-		t.Errorf("b@x.com：不是同一个人，不该有 quota_taken_by，实际 %q", b.QuotaTakenBy)
+	// 2026-11-22 起的新契约：不同人 ≠ 不同设备——a、b 共用同一台物理设备，
+	// a 今天已真领，占的正是这台设备每天唯一的额度名额，b 必须被点名占用者
+	// （quota_taken_by）并说明是「同设备」而不是「同一个人」，停止后台重试。
+	if b.QuotaTakenBy != "a@x.com" {
+		t.Errorf("b@x.com：同设备另一号已领，quota_taken_by 应点名 a@x.com，实际 %q", b.QuotaTakenBy)
+	}
+	if !strings.Contains(b.Msg, "同设备") {
+		t.Errorf("b@x.com：文案必须说明是同设备占用而不是同人，实际 %q", b.Msg)
+	}
+	if strings.Contains(b.Msg, "同一个人") {
+		t.Errorf("b@x.com：不同人时文案不得出现「同一个人」，实际 %q", b.Msg)
 	}
 	if out.Blocked != 0 {
 		t.Errorf("不应统计 blocked，实际 %d", out.Blocked)

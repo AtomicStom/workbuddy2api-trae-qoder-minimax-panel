@@ -790,9 +790,18 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 				qoderPoolScope(pool.Accounts, key))
 			p.res.CheckedInToday = false
 			p.res.QuotaTakenBy = ""
+			// 2026-11-22：不同人 ≠ 不同设备——对方不是同一个人，但若是**同一台
+			// 物理设备**上的另一个号且今天已真领，那份额度占的仍是这台设备的
+			// 每日名额，本号依然签不上，如实点名。
+			if holder, ok := QoderDeviceQuotaHolder(email); ok {
+				p.res.QuotaTakenBy = holder
+				p.res.Msg = "今日每日额度已被同设备的另一个账号 " + holder +
+					" 领取（同一台物理设备每天只发一份、先到先得；上游对后来账号隐藏当天活动）"
+			}
 		default:
 			// 问不出结论：先按本地可信记录兜底，再按「同人组里今天已有持有者」兜底
-			// （与 GET checkin-status 的 QuotaHolderInGroup 完全同一口径），
+			// （与 GET checkin-status 的 QuotaHolderInGroup 完全同一口径），再按
+			// 「同设备另一号今天已领」兜底（2026-11-22，与扫描侧同一口径），
 			// 最后才如实说"没观察到" —— 否则同一账号在两端点会一个是
 			// shared_person、一个是 unknown。
 			if CheckinRecordTrusted("qoder", email) {
@@ -804,6 +813,12 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 				p.res.QuotaTakenBy = holder
 				p.res.Msg = "今日每日额度已被同一个人的另一个账号 " + holder +
 					" 领取（服务端判定同一人，一天只发一份、先打先得）"
+				p.res.CheckedInToday = false
+			} else if holder, ok := QoderDeviceQuotaHolder(email); ok {
+				p.res.Phase = QoderPhasePending
+				p.res.QuotaTakenBy = holder
+				p.res.Msg = "今日每日额度已被同设备的另一个账号 " + holder +
+					" 领取（同一台物理设备每天只发一份、先到先得；上游对后来账号隐藏当天活动）"
 				p.res.CheckedInToday = false
 			} else {
 				p.res.Phase = QoderPhasePending
@@ -1746,6 +1761,56 @@ func UsedDeviceQuotaToday(excludeEmail string) bool {
 	return ok
 }
 
+// QoderDeviceQuotaHolder 返回「与本号共用同一台物理设备」的其它账号里，今天
+// 已有可信签到记录的那个（2026-11-22 新增）。
+//
+// 背景：上游按**物理设备**发每日额度——同一台设备一天只有一份，先到先得；
+// 后打的号会被静默隐藏当天的活动（不是 401、不是 SAME_PERSON，就是查不到）。
+// 两个号没有「同一人」判定记录时（QoderSamePersonPeers 为空），后打的号
+// 一直 pending，面板只显示「待核实」，后台还每 30 分钟空转重试。
+//
+// 判据（两个方向都查，避免单边配置漂移）：
+//   - 双方都不走独立设备/出口（qoderEgressIndependentForEmail=false，
+//     即都用本机真实设备指纹或同机派生前的 real 模式）；
+//   - 对方有**今天写入的可信**签到记录（CheckedInToday + CheckinRecordTrusted）。
+//
+// 命中时调用方应把本号标成额度被占用（QuotaTakenBy 点名），并从
+// QoderPendingEmails 的重试名单里排除——重试永远不会成功，只是在烧请求。
+func QoderDeviceQuotaHolder(excludeEmail string) (string, bool) {
+	pool, err := LoadQoderPool()
+	if err != nil || pool == nil {
+		return "", false
+	}
+	ex := normalizeQoderEmail(excludeEmail)
+	if ex == "" {
+		return "", false
+	}
+	if qoderEgressIndependentForEmail(ex) {
+		return "", false // 本号走独立设备/出口，不与别人共用这台机器的额度
+	}
+	var holders []string
+	for _, a := range pool.Accounts {
+		if a == nil {
+			continue
+		}
+		em := normalizeQoderEmail(qoderSnapshotEmail(a))
+		if em == "" || em == ex {
+			continue
+		}
+		if qoderEgressIndependentForEmail(em) {
+			continue // 对方走独立设备，领的也不是这台机器的额度
+		}
+		if CheckedInToday("qoder", em) && CheckinRecordTrusted("qoder", em) {
+			holders = append(holders, em)
+		}
+	}
+	if len(holders) == 0 {
+		return "", false
+	}
+	sort.Strings(holders)
+	return holders[0], true
+}
+
 // QoderScanAccount 号池单账号的上游核实结果。
 type QoderScanAccount struct {
 	Email          string `json:"email"`
@@ -1998,6 +2063,15 @@ func QoderPoolScan(emails []string) []QoderScanAccount {
 					row.QuotaTakenBy = holder
 					row.Msg = "今日每日额度已被同一个人的另一个账号 " + holder +
 						" 领取（服务端判定同一人，一天只发一份、先打先得）"
+				} else if holder, ok := QoderDeviceQuotaHolder(email); ok {
+					// 2026-11-22：同一人组没证据时，再看**同设备**方向——同一台物理
+					// 设备每天只发一份，同设备的另一个号今天真领到了，本号就是被
+					// 占了额度，如实点名并停止后台空转重试（QoderPendingEmails
+					// 会跳过 quota_taken_by 非空的号）。
+					row.DeviceQuotaUsed = true
+					row.QuotaTakenBy = holder
+					row.Msg = "今日每日额度已被同设备的另一个账号 " + holder +
+						" 领取（同一台物理设备每天只发一份、先打先得；上游对后来账号隐藏当天活动）"
 				}
 			}
 			// 注意：这里**不**计算 strategy —— 统一放到函数末尾重算，保证
@@ -2204,10 +2278,14 @@ func QoderPendingEmails() []string {
 	rows := QoderPoolScan(nil)
 	var out []string
 	for _, r := range rows {
-		if r.Phase == QoderPhaseClaimed && r.CheckedInToday {
+		// checked_in_today=true ⇒ 扫描已认定今天真签到了（上游确认，或有可信
+		// 本地记录的 pending 兜底）—— 不管 phase 是 claimed 还是 pending+local，
+		// 重试都只会重复请求上游，跳过。
+		if r.CheckedInToday {
 			continue
 		}
-		// 同人已领：额度被同组另一个号拿走了，本号重扫没有意义。
+		// 额度已被占用（同人组 / 同设备的另一个号已领）：重试永远不会成功，
+		// 只是在烧上游请求，跳过（2026-11-22 起覆盖同设备口径）。
 		if r.QuotaTakenBy != "" {
 			continue
 		}

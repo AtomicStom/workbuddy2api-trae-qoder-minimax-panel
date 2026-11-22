@@ -4842,13 +4842,13 @@ async function doQoderCheckin(btn, email) {
       if (ph === 'claimed') text = '签到成功 +' + Number(r.credits || 0) + ' Credits';
       else if (ph === 'already') text = '今日已领取';
       else if (ph === 'blocked') {
-        text = '同一人已领（未签到）' + (r.quota_taken_by ? '：今日额度由 ' + r.quota_taken_by + ' 领取' : '') +
+        text = '额度已被占用（未签到）' + (r.quota_taken_by ? '：今日额度由 ' + r.quota_taken_by + ' 领取' : '') +
           (why ? '；' + why : '');
       } else text = why || qdPhaseText(ph);
     } else {
       const parts = ['已领取 ' + claimed + (credits ? '（+' + credits + ' Credits）' : '')];
       if (already) parts.push('今日已领 ' + already);
-      if (blocked) parts.push('同一人已领 ' + blocked + '（未签到）');
+      if (blocked) parts.push('额度已被占用 ' + blocked + '（未签到）');
       if (pending) parts.push('待核实 ' + pending);
       if (failed) parts.push('失败 ' + failed);
       if (needLogin) parts.push('需重新登录 ' + needLogin);
@@ -5443,13 +5443,13 @@ let lastQoderCheckin = null; // 最近一次一键签到的原始响应，用于
 
 const QD_PHASE_ORDER = ['claimed', 'already', 'blocked', 'pending', 'failed', 'login_required', 'error'];
 const QD_PHASE_TEXT = {
-  claimed: '已领取', already: '今日已领', blocked: '同一人已领（未签到）',
+  claimed: '已领取', already: '今日已领', blocked: '额度已被占用（未签到）',
   pending: '待核实', failed: '失败', login_required: '需重新登录', error: '错误',
 };
 // strategy 文案：只在上游真有证据时才说「服务端判定同人」（2026-11-04 实测：
 // 服务端并未判这两个号同人 —— 两号 grantId 不同、各自 +100）。
 const QD_STRATEGY_TEXT = {
-  isolated: '额度独立（各号各一份）', shared_person: '服务端判定同人',
+  isolated: '额度独立（各号各一份）', shared_person: '额度已被占用（同人/同设备）',
   rotated: '按人轮换', unassigned: '待核实', unknown: '归属未核实',
 };
 
@@ -5664,8 +5664,8 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
       : '';
     const quotaTip = quota
       ? (holder
-        ? '今日每日额度已被服务端判定为同一个人的另一个账号 ' + holder + ' 领走（同人一天只发一份）'
-        : '今日每日额度已被服务端判定为同一个人的另一个账号领走（同人一天只发一份、先打先得）')
+        ? '今日每日额度已被另一个账号 ' + holder + ' 领走（同人/同设备一天只发一份、先到先得）'
+        : '今日每日额度已被另一个账号领走（同人/同设备一天只发一份、先到先得）')
       : '';
     // 状态还没查到（骨架阶段）：显示占位，绝不猜「可签到/已签到」。
     const status = !st2
@@ -5675,14 +5675,14 @@ function renderQoderRows(rows, arr, cur, st2, eg) {
         // 本号账上没新增积分，不能说"今日已签到"。2026-11-04 用户反馈的
         // 「两个号都显示 +100」就是这里来的。
         ? (phaseMap[k] === 'already' && holder
-          ? UI.badge('mute2', '○', '同一人已领（未入账）',
-              why || ('今日额度已由同一人另一个账号 ' + holder + ' 领取，本号账上未新增积分'))
+          ? UI.badge('mute2', '○', '额度已被占用（未入账）',
+              why || ('今日额度已由另一个账号 ' + holder + ' 领取，本号账上未新增积分'))
           : phaseMap[k] === 'claimed'
             ? UI.badge('ok', '✓', '上游确认已领', why || '上游活动列表确认今天已领取')
             : UI.badge('mute2', '○', '本地有记录', '面板有该账号的本地签到记录，上游领取结果待核实'))
         : (phaseMap[k] === 'pending'
           ? (quota
-            ? UI.badge('mute2', '○', '同一人已领（未签到）', why || quotaTip)
+            ? UI.badge('mute2', '○', '额度已被占用（未签到）', why || quotaTip)
             : UI.badge('mute2', '○', '未查到可领活动', why || '请在该账号的 Qoder 客户端确认'))
           : (phaseMap[k] === 'login_required'
             ? UI.badge('todo', '!', '需重新登录', why || '凭证已失效，请重新登录该账号后再添加')
@@ -6476,7 +6476,7 @@ async function doCheckinAll(btn) {
       const qc = qdCounts(qr);
       const qfail = qc.failed + qc.login_required + qc.error;
       let qtxt = '已领 ' + qc.claimed + ' · 今日已领 ' + qc.already +
-        (qc.blocked ? ' · 同一人已领 ' + qc.blocked + '（未签到）' : '') +
+        (qc.blocked ? ' · 额度已被占用 ' + qc.blocked + '（未签到）' : '') +
         (qc.pending ? ' · 待核实 ' + qc.pending : '') +
         (qfail ? ' · 失败 ' + qfail : '');
       if (q && q.credits) qtxt += '（+' + q.credits + '）';

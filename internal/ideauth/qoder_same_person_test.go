@@ -256,11 +256,18 @@ func TestQoderPersonLinkClearedWhenProbeSaysOther(t *testing.T) {
 	if b.Phase != QoderPhasePending {
 		t.Fatalf("B 号今天没有活动实例，应为 pending，实际 %+v", b)
 	}
-	if b.Strategy != QoderStrategyUnassigned {
-		t.Errorf("探测明确 other 后 strategy 必须是 unassigned，实际 %q（msg=%q）", b.Strategy, b.Msg)
+	// 2026-11-22 起的新契约：探测明确 other 后，同人 link 必须撤销（组回到 1），
+	// 但**同设备**的额度占用仍要点名——A 今天真领到了，占的正是这台物理设备
+	// 每天唯一的额度，B 的 strategy 因此是 shared_person（额度归属另有其人），
+	// 文案必须说「同设备」而不是「同一个人」。
+	if b.Strategy != QoderStrategySharedPerson {
+		t.Errorf("同设备另一号已领时 strategy 必须是 shared_person，实际 %q（msg=%q）", b.Strategy, b.Msg)
 	}
-	if b.QuotaTakenBy != "" {
-		t.Errorf("不是同一个人时 quota_taken_by 必须为空，实际 %q", b.QuotaTakenBy)
+	if b.QuotaTakenBy != "a@test.com" {
+		t.Errorf("同设备占用必须点名 a@test.com，实际 %q", b.QuotaTakenBy)
+	}
+	if !strings.Contains(b.Msg, "同设备") {
+		t.Errorf("文案必须说明是同设备占用，实际 %q", b.Msg)
 	}
 	if b.CheckedInToday {
 		t.Error("pending 号 checked_in_today 必须为 false")
@@ -269,7 +276,7 @@ func TestQoderPersonLinkClearedWhenProbeSaysOther(t *testing.T) {
 		t.Errorf("反证清除 link 后组大小应回到 1，实际 %d", b.QuotaGroup)
 	}
 	if strings.Contains(b.Msg, "同一个人") {
-		t.Errorf("unassigned 的文案不得出现「同一个人」这类肯定句，实际 %q", b.Msg)
+		t.Errorf("文案不得出现「同一个人」这类肯定句，实际 %q", b.Msg)
 	}
 	links := loadQoderPersonLinks()
 	if links["a@test.com"] == "b@test.com" || links["b@test.com"] == "a@test.com" {

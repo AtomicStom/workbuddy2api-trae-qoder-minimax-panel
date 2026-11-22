@@ -33,10 +33,15 @@ import (
 )
 
 // 活动页与客户端 UA（UA 必须带 SamanthaDoubao/ 才能过「仅限电脑版客户端」校验）。
+//
+// ⚠️ 版本号必须跟本机安装的豆包客户端一致：活动页会按 pc_version 下发不同的
+// 活动配置，旧版本号会拿到「该页面暂时不可用 / campaign not found」。
+// 2026-11-22 实测客户端为 2.35.12（旧代码写死 2.33.3，导致活动页直接报不可用）。
 const (
-	ActivityURL = "https://www.doubao.com/pc/agent-explore"
-	HomeURL     = "https://www.doubao.com/"
-	ClientUA    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 SamanthaDoubao/2.33.3"
+	ActivityURL   = "https://www.doubao.com/pc/agent-explore"
+	HomeURL       = "https://www.doubao.com/"
+	ClientUA      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 SamanthaDoubao/2.35.12"
+	ClientVersion = "2.35.12"
 )
 
 // Account 豆包账号（Cookie 凭据）。
