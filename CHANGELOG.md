@@ -1,5 +1,55 @@
 # 变更日志
 
+## 2026-11-22（v1.15.13-panel）
+
+### 修复：Qoder「QQ 显示已签到」是**假标记**——陈旧 claim_cid 被 qoderPersonVerdict 当成「今日已领」
+
+**现象（11-19 起每天必现）**：后台日志每 30 分钟一轮永远一模一样——
+「本次签到 0 · 今日已领 1 · 未下发 1 · 待签 2」；QQ 号在面板显示「已签到」，
+可积分余额自 11-19 起**零增长**、账本里也查不到它当天的任何条目。
+
+**⚠️ 更正**：v1.15.12 条目②里「QQ 号当天真领到（本地可信记录 17:59）」的表述
+是**错的**——那条「可信记录」正是本条修复的假标记产物，被它带偏出了「同设备配额」
+的错误结论。实测（7 个环境码 × real/derived × 双 base 全量探测）：上游自 11-19 起
+就没给这两个号下发每日活动，**一个号都没签上过**，不存在「只签到一个」。
+
+**根因链（证据全部对上）**：
+
+1. gmail 的号池快照存着上次领取的 `claim_cid`（11-18 那天的活动），QQ 没有；
+2. 每轮 pool：QQ pending → 拿 gmail 的**陈旧 cid** 去只读探测 → QQ 当时真领过
+   那条活动 → 服务端如实回 `status=CLAIMED + claimedAt=2026-11-18T02:03:41Z`；
+3. `qoderPersonVerdict` 见 CLAIMED 即判 **Owner** → QQ 被标成「今日已领」：
+   - `MarkClaimedAt` 写进**陈旧**领取时刻（Claims 停在 11-18，与实测值严丝合缝）；
+   - `MarkCheckedIn` 每轮刷新 Entries（17:33:42 → 17:59:29，假「已签到」）；
+   - 账本记录用陈旧 claimedAt 算日期 → **合并进 11-18 的历史条目**（claimed 粘性），
+     当天审计里这个号凭空消失——这就是「账本没有 QQ 条目却已签到」的矛盾根源；
+4. 假 Entries 记录又让 `CheckinRecordTrusted` 通过 → 次轮 default 分支继续判
+   already → **自我续命的死循环**（11-19 09:57 起每轮如此）。
+
+**改动（`internal/ideauth/qoder_pool_checkin.go`）**：
+
+- 新增 `qoderClaimedAtStale` / `qoderVerdictIfClaimToday`：探测结论（Owner/
+  SamePerson）携带的 claimedAt **确凿陈旧**（能解析且不是今天 UTC+8）⇒ 降为
+  Unknown——宁可不判，绝不拿旧账当今日已签。claimedAt 缺失不推翻（上游奖励
+  记录都带领取时刻，实测），已接入 pool 的 candidates/snapCands 两处探测与
+  扫描侧 path B；
+- 扫描侧 path A 与 pool 的 already 归属探测、`qoderApplyCheckinSideEffects`：
+  `MarkClaimedAt` 一律只认**今天**的领取时刻（防 Claims 回拨）；
+- `qoderClaimRecordOf`：账本 Date/At 必须落在**今天**（记的是「今天这次尝试」），
+  陈旧 claimedAt 不得改写账本日期、不得把当条尝试并进历史日期；
+- 「额度归属是同人的另一个号」的 already：保持 already 相位（与扫描侧口径一致）
+  但 `checked_in_today=false`，且副作用层**跳过 MarkCheckedIn**（`qoderItemFromResult`
+  尊重 `res.CheckedInToday`、`qoderFillAlreadyQuotaOwner` 补 false）——本号没签上
+  就绝不能在面板上显示假「已签到」；
+- 数据修复：清除 QQ 的假 Entries 记录（Claims 里 11-18 的真实领取保留）。
+
+**测试**：新增契约回归 `TestQoderStaleSnapshotCidNotAlready`（陈旧 cid + CLAIMED +
+昨天 claimedAt ⇒ 必须保持 pending、不写任何签到记录、账本条目落在今天）；
+全套离线测试通过；live 实测（真实上游）：两号回到待签名单、Already=0、
+无任何记录写入、账本当天条目齐全。
+
+---
+
 ## 2026-11-22（v1.15.12-panel）
 
 ### 修复三连：豆包不能签到 / Qoder 只签到一个 / 一键签到非常慢

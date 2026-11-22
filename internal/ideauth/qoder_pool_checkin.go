@@ -697,7 +697,7 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 			}
 			ownerProbe := qoderProbeReward(p.auth, p.dev, cid, QoderQuotaScopeKey(p.item.snap))
 			holderProbe := qoderProbeReward(holderAuth, baseDev, cid, QoderQuotaScopeKey(p.item.snap))
-			v := qoderPersonVerdict(ownerProbe, holderProbe)
+			v := qoderVerdictIfClaimToday(qoderPersonVerdict(ownerProbe, holderProbe), ownerProbe, holderProbe)
 			if v == QoderVerdictSamePerson || v == QoderVerdictOwner {
 				verdict, holder = v, em
 				amount = ownerProbe.Credits
@@ -729,7 +729,7 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 				}
 				ownerProbe := qoderProbeReward(p.auth, p.dev, cid, QoderQuotaScopeKey(p.item.snap))
 				holderProbe := qoderProbeReward(holderAuth, baseDev, cid, QoderQuotaScopeKey(p.item.snap))
-				v := qoderPersonVerdict(ownerProbe, holderProbe)
+				v := qoderVerdictIfClaimToday(qoderPersonVerdict(ownerProbe, holderProbe), ownerProbe, holderProbe)
 				if v == QoderVerdictSamePerson || v == QoderVerdictOwner {
 					verdict, holder = v, em
 					amount = ownerProbe.Credits
@@ -874,6 +874,11 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 				}
 				ap.res.QuotaTakenBy = holder
 				ap.res.CheckedInToday = false
+				// ⚠️ 2026-11-22：保持 already 相位（与扫描侧口径一致），但
+				// checked_in_today 必须为 false，且副作用层对「额度归属是别人」
+				// 的 already 一律跳过 MarkCheckedIn（见 qoderApplyCheckinSideEffects）
+				// —— 本号今天**没签上**，那份额度在同人另一个号的账上，
+				// 绝不能在面板上显示成假「已签到」。
 				ap.res.Msg = "今日额度已被同一个人的另一个账号 " + holder +
 					" 领走（服务端判定同一人，一天只发一份；本号账上未新增积分）"
 				if err := saveQoderPersonLink(email, holder); err != nil {
@@ -881,20 +886,21 @@ func QoderCheckinPoolOrdered(emails []string, priority string) (*QoderCheckinPoo
 				}
 			case probe.GrantID != "":
 				verdict = QoderVerdictOwner
+				// 拿到本号自己的 grantId ⇒ 这份 already 是本号自己领的，
+				// 「今日已领」如实成立（2026-11-22：qoderItemFromResult 改为
+				// 尊重 res.CheckedInToday，这里必须显式置 true，零值会误伤）。
+				ap.res.CheckedInToday = true
 				// 上游给了本号这份额度的**领取时刻**：落进 Claims，账本才知道
 				// 「上次领到」是什么时候（否则这个号永远显示没有领到时间）。
-				if t, err := time.Parse(time.RFC3339, strings.TrimSpace(probe.ClaimedAt)); err == nil {
+				// ⚠️ 只认**今天**的领取时刻：这条 cid 若是补领的昨日活动，claimedAt
+				// 是陈旧的，写进 Claims 会把「上次领到」回拨（2026-11-22）。
+				if t, err := time.Parse(time.RFC3339, strings.TrimSpace(probe.ClaimedAt)); err == nil && sameCheckinDay("qoder", t) {
 					_ = MarkClaimedAt("qoder", email, t)
 				}
 			}
 		}
 		verdicts[key] = verdict
 		item := qoderItemFromResult(ap.item, ap.res, ap.rank, groupSize[key], probeConclusion, prevClaimed[key], verdict)
-		if verdict == QoderVerdictSamePerson {
-			// 服务端判本号被拒 ⇒ 本号今天**没签上**（那份额度在同人另一个号账上）。
-			// 绝不能显示成「今日已签到」。
-			item.CheckedInToday = false
-		}
 		qoderApplyCheckinSideEffects(item, ap.res)
 		out.Results = append(out.Results, item)
 	}
@@ -1202,6 +1208,8 @@ func qoderFillAlreadyQuotaOwner(results []QoderCheckinItem) {
 		if r.BenefitAmount == 0 {
 			r.BenefitAmount = 100
 		}
+		// 与扫描侧（GET checkin-status）同一口径：额度在别人账上 ⇒ 本号没签上。
+		r.CheckedInToday = false
 		r.Msg = "今日额度已被同一个人的另一个账号 " + owner +
 			" 领走（服务端判定同一人，一天只发一份；本号账上未新增积分）"
 	}
@@ -1249,8 +1257,12 @@ func qoderItemFromResult(it qoderPoolItem, res *QoderCheckinResult, rank, group 
 		// 拿到自己的 grantId ⇒ 本号自己领的，credits 照实显示；
 		// 服务端回 BLOCKED+SAME_PERSON ⇒ 本号没领到，credits 归零 + 点名归属
 		// （见 qoderFillAlreadyQuotaOwner）。
+		//
+		// ⚠️ 2026-11-22：尊重 res.CheckedInToday —— 「额度归属是同人的另一个号」
+		// 的 already（alreadyProbes SamePerson 分支 / qoderFillAlreadyQuotaOwner）
+		// 本号今天**没签上**，绝不能显示成「今日已签到」。其余 already 照旧。
 		item.Credits = res.Credits
-		item.CheckedInToday = true
+		item.CheckedInToday = res.CheckedInToday
 		item.ClaimedAt = res.ClaimedAt
 	default:
 		// 契约：非 claimed/already 的 credits 必须为 0，活动面值另放 benefit_amount。
@@ -1436,6 +1448,52 @@ func qoderItemUID(snap *QoderSnapshot) string {
 	return ""
 }
 
+// qoderClaimedAtToday 该领取时刻是否落在「今天」（Qoder 口径：UTC+8 自然日）。
+// 时刻缺失/无法解析时返回 false（不臆断）。
+func qoderClaimedAtToday(s string) bool {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
+	return err == nil && sameCheckinDay("qoder", t)
+}
+
+// qoderClaimedAtStale 该领取时刻是否有**确凿的陈旧证据**：
+// 能解析成时刻、且不落在今天（UTC+8 自然日）。claimedAt 缺失/无法解析时
+// 返回 false —— 上游奖励记录都带领取时刻（实测），缺失只说明这次没拿到
+// 数据，不能据此推翻探测结论。
+func qoderClaimedAtStale(s string) bool {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
+	return err == nil && !sameCheckinDay("qoder", t)
+}
+
+// qoderVerdictIfClaimToday 过滤「**昨天的旧账**冒充今日额度」的探测结论
+// （2026-11-22 修复）。
+//
+// ⚠️ 根因（2026-11-19 起每天必现的「已领 1 / 未下发 1 / 待签 2」死循环）：
+// 号池快照里存着**上次领取**的活动实例 id（ClaimCID，可能是昨天/更早的）。
+// pending 二次判定拿这个陈旧 cid 去只读探测时，只要本号当时真领过那条活动，
+// 服务端就会如实回 status=CLAIMED + 当时的 claimedAt —— qoderPersonVerdict
+// 见 CLAIMED 即判 Owner，pending 号于是被标成「今日已领」：
+//   - MarkClaimedAt 被写进**陈旧**的领取时刻（Claims 停在旧日）；
+//   - MarkCheckedIn 每轮刷新 Entries（面板整天显示假「已签到」）；
+//   - 账本记录用陈旧 claimedAt 算日期，合并进历史条目 → 当天永远没有审计记录。
+//
+// 判据：Owner 要求 ownerProbe（本号视角）的 claimedAt 不是陈旧的；
+// SamePerson 要求 holderProbe（持有者视角）的 claimedAt 不是陈旧的。
+// claimedAt 缺失时**不推翻**结论（与历史行为一致）；一旦确凿陈旧 ⇒ 降为
+// Unknown —— 宁可不判，绝不拿旧账当今日已签。
+func qoderVerdictIfClaimToday(verdict string, ownerProbe, holderProbe QoderRewardProbe) string {
+	switch verdict {
+	case QoderVerdictOwner:
+		if qoderClaimedAtStale(ownerProbe.ClaimedAt) {
+			return QoderVerdictUnknown
+		}
+	case QoderVerdictSamePerson:
+		if qoderClaimedAtStale(holderProbe.ClaimedAt) {
+			return QoderVerdictUnknown
+		}
+	}
+	return verdict
+}
+
 // qoderApplyCheckinSideEffects 把签到结果落到本地签到记录（checkin_log.json）。
 //
 // 只有真领到（claimed）与今日已领（already）才写「已签到」；blocked 还要清掉
@@ -1450,9 +1508,19 @@ func qoderApplyCheckinSideEffects(item QoderCheckinItem, res *QoderCheckinResult
 		_ = MarkCheckedIn("qoder", item.Email)
 	case QoderPhaseAlready:
 		// already 是「今日已领」（服务端活动列表已是 CLAIMED / 奖励记录在本号账上）。
+		// ⚠️ 但「额度归属是同人的另一个号」的 already（quota_taken_by 点名了别人，
+		// 见 qoderFillAlreadyQuotaOwner / alreadyProbes SamePerson 分支）**不算
+		// 本号签到**（2026-11-04 实测：那 100 积分进的是对方的账）—— 绝不能
+		// MarkCheckedIn，否则面板整天显示假「已签到」（2026-11-22 修复）。
+		if res != nil && strings.TrimSpace(item.QuotaTakenBy) != "" &&
+			!strings.EqualFold(normalizeQoderEmail(item.QuotaTakenBy), normalizeQoderEmail(item.Email)) {
+			return
+		}
 		// 有上游给的 claimedAt 时同样落 Claims：轮换排序要的是「上次真正领到」，
 		// already 的号今天已经入账，不能因为少了这条记录被当成"从没领到"而反复优先。
-		if res != nil && strings.TrimSpace(res.ClaimedAt) != "" {
+		// ⚠️ 只认**今天**的 claimedAt（2026-11-22）：陈旧时刻会把 Claims 回拨
+		// （根因见 qoderVerdictIfClaimToday 注释），绝不写入。
+		if res != nil && qoderClaimedAtToday(res.ClaimedAt) {
 			_ = MarkClaimedAt("qoder", item.Email, claimStamp(res))
 		}
 		_ = MarkCheckedIn("qoder", item.Email)
@@ -1464,7 +1532,11 @@ func qoderApplyCheckinSideEffects(item QoderCheckinItem, res *QoderCheckinResult
 // qoderClaimRecordOf 把结果项转成一条逐日账本记录（契约 C-QD-LEDGER@1）。
 func qoderClaimRecordOf(item QoderCheckinItem) QoderClaimRecord {
 	at := strings.TrimSpace(item.ClaimedAt)
-	if at == "" {
+	// ⚠️ 2026-11-22：账本记的是「**今天这次尝试**」—— Date/At 必须落在今天。
+	// 旧代码直接拿 item.ClaimedAt 当记录时刻，而它可能是上次领取的**陈旧**
+	// 时刻（根因见 qoderVerdictIfClaimToday 注释）：Date 会被算成旧日期，
+	// 这条尝试合并进历史记录后，当天的审计账本里就永远看不到这个号。
+	if !qoderClaimedAtToday(at) {
 		at = time.Now().In(qoderCST).Format(time.RFC3339)
 	} else if t, err := time.Parse(time.RFC3339, at); err == nil {
 		at = t.In(qoderCST).Format(time.RFC3339)
@@ -2155,7 +2227,9 @@ func QoderPoolScan(emails []string) []QoderScanAccount {
 				verdictByEmail[em] = QoderVerdictOwner
 				// 上游给了本号这份额度的领取时刻：落进 Claims（账本要知道
 				// 「上次领到」是什么时候，否则这个号永远显示没有领到时间）。
-				if t, err := time.Parse(time.RFC3339, strings.TrimSpace(probe.ClaimedAt)); err == nil {
+				// ⚠️ 只认**今天**的领取时刻（2026-11-22）：这条 cid 可能是补领的
+				// 昨日活动，claimedAt 陈旧，照写会把 Claims 回拨到昨天。
+				if t, err := time.Parse(time.RFC3339, strings.TrimSpace(probe.ClaimedAt)); err == nil && sameCheckinDay("qoder", t) {
 					_ = MarkClaimedAt("qoder", em, t)
 				}
 			}
@@ -2178,7 +2252,10 @@ func QoderPoolScan(emails []string) []QoderScanAccount {
 			}
 			ownerProbe := qoderProbeReward(myAuth, QoderDeviceInfo(), cid, r.Scope)
 			holderProbe := qoderProbeReward(ownerAuth, QoderDeviceInfo(), cid, r.Scope)
-			switch qoderPersonVerdict(ownerProbe, holderProbe) {
+			// ⚠️ 只认**今天的额度**产生的结论（2026-11-22）：cid 可能来自一条
+			// 昨天的可领活动，拿它判出 SAME_PERSON 会把昨天的事写成
+			// 「今日额度已被对方领走」。
+			switch qoderVerdictIfClaimToday(qoderPersonVerdict(ownerProbe, holderProbe), ownerProbe, holderProbe) {
 			case QoderVerdictSamePerson:
 				r.DeviceQuotaUsed = true
 				r.QuotaTakenBy = other
