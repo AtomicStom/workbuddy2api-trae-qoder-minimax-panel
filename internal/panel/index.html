@@ -774,6 +774,45 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 }
 
 
+
+/* ===== DSH-TOPBAR2: 顶栏强制单行压实（全局换行后曾涨到 158px） ===== */
+@media (max-width: 760px) {
+  .topbar {
+    flex-wrap: nowrap !important;
+    padding: 5px 10px !important;
+    gap: 6px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    align-items: center !important;
+  }
+  .topbar h2 {
+    font-size: 16px !important;
+    line-height: 1.2 !important;
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+    max-width: 42% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    margin: 0 !important;
+  }
+  /* 运行时长属于次要信息，窄屏直接隐藏，省一整行 */
+  .topbar .meta, .topbar .sep, .topbar .grow { display: none !important; }
+  .topbar button {
+    flex: 0 0 auto !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    padding: 0 9px !important;
+    font-size: 12px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+  }
+  .topbar button.icon { width: 30px !important; padding: 0 !important; }
+  .topbar > button:nth-last-child(1) { margin-left: auto !important; }
+
+  /* 所有表头在窄屏隐藏，避免「操作」这类列名被压成 12px 竖排 */
+  thead { display: none !important; }
+}
 /* ===== DSH-GLOBALFLEX: 根治窄屏「文字被压成竖排」 =====
    根因：面板大量 .row/.box 用 display:flex + flex-wrap:nowrap，窄屏下
    子元素被压到十几像素宽，中文就一个字符一行（实测标题曾低到 13px 宽）。
