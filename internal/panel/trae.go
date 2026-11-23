@@ -274,6 +274,75 @@ func (p *Panel) StartTraeAuto(ctx context.Context, hours []int) {
 	}()
 }
 
+// StartTraeBalanceRefresh 周期性把 24 个账号的真实余额抓一遍并落盘缓存。
+//
+// 为什么需要：总览页显示余额时不能现查上游（24 个账号串行要 6 秒，且并发会
+// 触发 Trae WAF 444）。所以由这个后台任务定时刷新本地缓存，页面读缓存即可。
+// 间隔默认 10 分钟（config.schedule.trae_balance_refresh_minutes）。
+//
+// 串行 + 每个账号间隔 250ms：与 traeAccounts 同口径，避开 WAF。
+func (p *Panel) StartTraeBalanceRefresh(ctx context.Context, minutes int) {
+	if !p.cfg.TraeEnabled {
+		return
+	}
+	if minutes <= 0 {
+		minutes = 10
+	}
+	go func() {
+		interval := time.Duration(minutes) * time.Minute
+		// 启动后先等 30 秒再跑第一轮：给进程冷启动（模型目录预热等）让路。
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
+		}
+		for {
+			p.traeRefreshBalancesOnce()
+			log.Printf("panel: Trae 余额刷新完成，下次 %d 分钟后", minutes)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
+		}
+	}()
+}
+
+// traeRefreshBalancesOnce 串行查一遍全部 Trae 账号的真实余额，合并写进
+// data/remaining_credits.json。单个账号失败不影响其它账号。
+func (p *Panel) traeRefreshBalancesOnce() {
+	accts, err := p.traeLoadAccounts()
+	if err != nil || len(accts) == 0 {
+		return
+	}
+	got := map[string]float64{}
+	okN, failN := 0, 0
+	for _, a := range accts {
+		// 凭证本地已过期就跳过，省一次必然失败的请求。
+		if exp, ok := upstream.TraeJWTExpiry(a.JWT); ok && time.Now().After(exp) {
+			failN++
+			continue
+		}
+		if rem, _, _, _, _, uerr := upstream.TraeCreditsUsage(a); uerr == nil {
+			if a.UserID != "" {
+				got[a.UserID] = rem
+			}
+			okN++
+		} else {
+			failN++
+		}
+		time.Sleep(250 * time.Millisecond) // 账号间节流，避开 WAF
+	}
+	if len(got) > 0 {
+		if err := upstream.SaveTraeCreditsLocal(p.cfg.TraeDataDir, got); err != nil {
+			log.Printf("panel: Trae 余额缓存落盘失败: %v", err)
+		}
+	}
+	if failN > 0 {
+		log.Printf("panel: Trae 余额刷新 成功 %d / 失败 %d", okN, failN)
+	}
+}
+
 // traeCheckinAll 自动排程用的全量签到（无 HTTP 上下文，结果只进日志）。
 func (p *Panel) traeCheckinAll() {
 	accts, err := p.traeLoadAccounts()
