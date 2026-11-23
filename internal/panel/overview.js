@@ -177,6 +177,9 @@
       rows.appendChild(r);
     };
     mk('剩余积分', fmt(credits));
+    if (!isTrae && a.credits_earliest_remaining !== undefined && a.credits_earliest_remaining !== null) {
+      mk('可用(最早到期)', fmt(a.credits_earliest_remaining));
+    }
     if (total !== null && total !== undefined) mk('积分总额', fmt(total));
     if (expiry) mk('到期', String(expiry).replace('T', ' ').slice(0, 16));
     card.appendChild(rows);
@@ -307,14 +310,36 @@
     mountPoint.appendChild(el('div', 'ov-empty', '正在加载…'));
 
     try {
-      const [traeRes, wbRes, modelsRes] = await Promise.all([
+      const [traeRes, wbRes, modelsRes, ovRes] = await Promise.all([
         get(API.trae),
         get(API.wb),
         get(API.models),
+        get(API.overview).catch(() => ({ accounts: [] })),
       ]);
+
+      // WB 的积分不在 /ide/workbuddy/accounts 里，只有 /overview 才有。
+      // 按 uid 合并：以 overview 为准补齐 credits / credits_total / 到期 / 签到。
+      const ovByUid = new Map(
+        (ovRes.accounts || []).map(a => [a.uid, a])
+      );
+      const wb = (wbRes.accounts || []).map(a => {
+        const o = ovByUid.get(a.uid) || {};
+        return Object.assign({}, a, {
+          credits: o.credits,
+          credits_total: o.credits_total,
+          credits_earliest_expiry: o.credits_earliest_expiry,
+          credits_earliest_remaining: o.credits_earliest_remaining,
+          checked_in_today: a.checked_in_today !== undefined
+            ? a.checked_in_today
+            : !!o.checkin_done,
+          cooling: o.cooling,
+          disabled: o.disabled,
+        });
+      });
+
       state.data = {
         trae: traeRes.accounts || [],
-        wb: wbRes.accounts || [],
+        wb: wb,
         models: modelsRes.models || [],
       };
       mountPoint.innerHTML = '';
