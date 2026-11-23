@@ -74,8 +74,12 @@ type TraeAccount struct {
 	SessionID    string `json:"session_id,omitempty"`
 	MarketUserID string `json:"market_user_id,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
-	AddedAt      string `json:"added_at,omitempty"`
-	UpdatedAt    string `json:"updated_at,omitempty"`
+	// MachineID / ClientID 由外部导入时写入：前者是 IDE 协议要求的设备指纹，
+	// 后者是 refresh_token 的签发方。缺任一项都会导致续期或请求被上游拒绝。
+	MachineID string `json:"machine_id,omitempty"`
+	ClientID  string `json:"client_id,omitempty"`
+	AddedAt   string `json:"added_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 // TraeAccountsFile checkin_accounts.json 顶层结构。
@@ -776,16 +780,21 @@ const (
 
 // TraeExchangeToken 用 refresh_token 换新的 access token（JWT）。
 // 返回的 newRefresh 非空时表示服务端轮换了 refresh_token，调用方需落盘。
-func TraeExchangeToken(refreshToken string) (accessToken, newRefresh string, err error) {
+func TraeExchangeToken(refreshToken string, clientID ...string) (accessToken, newRefresh string, err error) {
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
 		return "", "", fmt.Errorf("该账号没有 refresh_token，无法自动续期（需用浏览器重新登录一次以获取）")
 	}
+	// client_id 必须与签发 refresh_token 的客户端一致，否则上游回 400。
+	// 账户里没存就回落官方客户端（面板自己登录创建的号属于这一类）。
+	useClient := traeOAuthClientID
+	if len(clientID) > 0 && strings.TrimSpace(clientID[0]) != "" {
+		useClient = strings.TrimSpace(clientID[0])
+	}
 	body, _ := json.Marshal(map[string]string{
-		"ClientID":     traeOAuthClientID,
+		"ClientID":     useClient,
+		"GrantType":    "refresh_token",
 		"RefreshToken": refreshToken,
-		"ClientSecret": traeOAuthClientSecret,
-		"UserID":       "",
 	})
 	req, err := http.NewRequest(http.MethodPost, traeOAuthExchangeURL, bytes.NewReader(body))
 	if err != nil {
