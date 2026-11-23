@@ -908,8 +908,34 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
 @media (max-width: 420px) {
   .stats, .kpis, .kpis.k4 { grid-template-columns: 1fr !important; }
-  button, .btn, a.btn { width: 100%; justify-content: center; }
+  /* 只让正文里的操作按钮整行，顶栏按钮保持紧凑 */
+  .box button, .card button, .row-btns button { width: 100%; justify-content: center; }
+  .topbar button { width: auto !important; }
   .pad { padding: 10px !important; }
+}
+
+/* ===== DSH-TOPBAR3: 顶栏最终压条（必须排在全局 flex-wrap 之后才生效） ===== */
+@media (max-width: 760px) {
+  .topbar.topbar {
+    flex-wrap: nowrap !important;
+    padding: 5px 10px !important;
+    gap: 6px !important;
+    align-items: center !important;
+    height: auto !important;
+  }
+  .topbar.topbar h2 {
+    font-size: 16px !important; line-height: 1.2 !important;
+    flex: 0 1 auto !important; min-width: 0 !important; max-width: 40% !important;
+    overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important;
+  }
+  .topbar.topbar .meta, .topbar.topbar .sep, .topbar.topbar .grow { display: none !important; }
+  .topbar.topbar button {
+    width: auto !important; flex: 0 0 auto !important;
+    height: 30px !important; min-height: 30px !important;
+    padding: 0 9px !important; font-size: 12px !important; white-space: nowrap !important;
+  }
+  .topbar.topbar button.icon { width: 30px !important; padding: 0 !important; }
+  .topbar.topbar > button:last-child { margin-left: auto !important; }
 }
 </style>
 </head>
