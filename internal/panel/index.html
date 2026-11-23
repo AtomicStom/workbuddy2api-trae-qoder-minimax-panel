@@ -721,6 +721,22 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   /* 底部标签栏下的按钮不再需要额外留白 */
   .shell { padding-bottom: 0 !important; }
 }
+
+/* ===== DSH-NAVFIX: 底部标签栏压实（实测 .brand 占 81px 撑高导航） =====
+   修复前：.nav 高 145px（其中 .brand 81px 纯空白），遮住 17% 屏幕。
+   修复后：只剩一行标签，约 60px。 */
+@media (max-width: 760px) {
+  html, body { height: auto !important; }
+  body { padding: 10px 10px calc(66px + env(safe-area-inset-bottom, 0px)) !important; overflow-x: hidden; }
+  .nav { padding: 0 !important; gap: 0 !important; }
+  .nav .brand { display: none !important; }
+  .nav ul { flex: none !important; padding: 3px 6px !important; }
+  .nav ul li { flex: none !important; }
+  .nav a { min-height: 50px !important; padding: 5px 9px !important; border-radius: 9px; }
+  .nav a span, .nav a .lbl { font-size: 10.5px !important; line-height: 1.1; }
+  /* 主内容不再被固定高度束缚，整页自然滚动 */
+  .shell, main, .wrap { height: auto !important; min-height: 0 !important; overflow: visible !important; }
+}
 /* ===== DSH-MOBILE-PATCH: 移动端适配（窄屏优先） =====
    面板原有断点只处理了栅格列数，没处理「表格挤压 / 字号过小 / 触控太小」。
    这里按 760px 与 420px 两档补齐，只做覆盖、不改原有规则。 */
