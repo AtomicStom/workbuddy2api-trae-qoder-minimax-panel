@@ -944,6 +944,25 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   /* 对应的行容器改为自适应宽度，不再按 160/132/190 固定列排 */
   .tb-row, .acc-row { grid-template-columns: 1fr !important; }
 }
+
+/* ===== DSH-NOSQUEEZE: 通用防挤压 =====
+   面板里大量元素是 grid/flex 的定宽列，窄屏下被压到 19~23px，中文逐字换行。
+   这里给「短文本元素」设内容最小宽度，并允许所在容器横向滚动兜底。 */
+@media (max-width: 760px) {
+  .stask, .state, .chip, .tag, .badge, .lb, .col, .op, .th, .td, td, th {
+    min-width: fit-content !important;
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+  }
+  /* 定宽列容器不再压子元素 */
+  .thead, .tb-row, .acc-row, .rowline, [class*="cols"] {
+    min-width: fit-content !important;
+  }
+  /* 标题与说明文字允许正常换行 */
+  h1, h2, h3, p, .note, .hint, .desc { white-space: normal !important; }
+  /* 卡片兜底横滑，避免内容被裁掉 */
+  .box { overflow-x: auto !important; }
+}
 </style>
 </head>
 <body>
