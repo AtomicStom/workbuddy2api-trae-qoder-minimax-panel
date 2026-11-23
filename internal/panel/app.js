@@ -437,7 +437,7 @@ function go(v) {
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
   $('ttl').textContent = TITLES[v];
-  if (v === 'overview') { if (window.__dshOverview && !window.__ovLoaded) { window.__ovLoaded = 1; window.__dshOverview.load(); } }
+  if (v === 'overview') { if (window.__dshOverview) window.__dshOverview.show(); }
   if (v === 'models') { if (!$('mdBody').children.length) loadModels(); loadModelQueue(); }
   if (v === 'config') loadConfig();
   if (v === 'logs') loadLogs();
