@@ -56,6 +56,16 @@
   // 状态：平台筛选 + 签到筛选
   const state = { plat: 'all', st: 'all', data: null };
 
+  // 余额缓存的陈旧程度：Trae 余额由后台每 10 分钟刷新一次，
+  // 这里显示「X 分钟前」让用户知道看到的是什么时候的数据。
+  function ageText() {
+    if (!state.data || !state.data.fetchedAt) return '—';
+    const min = Math.floor((Date.now() - state.data.fetchedAt) / 60000);
+    if (min < 1) return '刚刚';
+    if (min < 60) return min + ' 分钟前';
+    return Math.floor(min / 60) + ' 小时前';
+  }
+
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -94,7 +104,7 @@
       {
         lbl: 'Trae 剩余积分',
         num: fmt(traeCredits),
-        sub: `${trae.length} 个账号合计`,
+        sub: `${trae.length} 个账号合计 · 缓存 ${ageText()}`,
         cls: '',
       },
       {
@@ -255,6 +265,25 @@
     ttl.appendChild(el('span', '', `共 ${items.length} 个`));
     tools.appendChild(ttl);
 
+    // 刷新余额：现查上游真实余额（串行，约 6 秒），写完缓存后重渲染。
+    const btnBal = el('button', 'ov-chip', '刷新余额');
+    btnBal.title = '现查上游真实余额（约 6 秒）';
+    btnBal.addEventListener('click', async () => {
+      btnBal.disabled = true;
+      btnBal.textContent = '刷新中…';
+      try {
+        await get('trae/credits');
+        await load(false);
+        if (typeof window.toast === 'function') window.toast('余额已刷新');
+      } catch (e) {
+        if (typeof window.toast === 'function') window.toast('刷新失败：' + e.message, 'bad');
+      } finally {
+        btnBal.disabled = false;
+        btnBal.textContent = '刷新余额';
+      }
+    });
+    tools.appendChild(btnBal);
+
     const plats = [['all', '全部'], ['trae', 'Trae'], ['wb', 'WorkBuddy']];
     plats.forEach(([v, label]) => {
       const c = el('button', 'ov-chip' + (state.plat === v ? ' on' : ''), label);
@@ -362,6 +391,7 @@
         trae: traeRes.accounts || [],
         wb: wb,
         models: modelsRes.models || [],
+        fetchedAt: Date.now(),
       };
       mountPoint.innerHTML = '';
       render(host);
