@@ -66,7 +66,7 @@ func (p *Panel) traeRefreshOne(a upstream.TraeAccount, force bool) traeRefreshRe
 
 	// ── 通道 1：refresh_token（首选）────────────────────────────────────────
 	if rt := strings.TrimSpace(a.RefreshToken); rt != "" {
-		jwt, newRT, err := upstream.TraeExchangeToken(rt)
+		jwt, newRT, err := upstream.TraeExchangeToken(rt, a.ClientID)
 		if err == nil {
 			if _, serr := upstream.SaveTraeAccount(p.cfg.TraeDataDir, upstream.TraeAccount{
 				UserID: a.UserID, JWT: jwt, RefreshToken: newRT,
