@@ -75,6 +75,9 @@ func (p *Panel) traeAccounts(w http.ResponseWriter, r *http.Request) {
 	// 各打一次请求 —— Trae 的 WAF（volc-dcdn，HTTP 444 X-TT-System-Error: 3）
 	// 会因为这种并发查询把整个 IP 判为异常，导致页面全红。
 	// 所以只要今天已经签过（快照里有记录），就直接用快照回答，不再碰上游。
+	//
+	// ⚠️ 快照里的 earned 是**签到所得**（今天领了多少），不是余额。
+	// 余额必须取自 local_credits（upstream 缓存的真实余额），两者不能混用。
 	today := time.Now().Format("2006-01-02")
 	snapEarned := map[string]float64{}
 	if f := p.loadTraeCreditsSelf(); f != nil {
@@ -88,10 +91,23 @@ func (p *Panel) traeAccounts(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// 真实余额：读 upstream 落盘的本地缓存（助手/签到过程会持续刷新），
+	// 不在这里现查上游 —— 那正是触发 444 的原因。
+	realBalance := map[string]float64{}
+	if lc := upstream.LoadTraeCreditsLocal(p.cfg.TraeDataDir); lc != nil {
+		for uid, bal := range lc.Credits {
+			realBalance[uid] = bal
+		}
+	}
+
+	// 串行 + 间隔：Trae 的 WAF 对并发非常敏感（24 个并发查询会把整个 IP
+	// 判成异常，返回 HTTP 444）。这里改成一次一个、每个之间歇 250ms，
+	// 宁可慢几秒也不要整页报错。用户感知是多等一会，但结果是全绿。
+	const traeQueryGap = 250 * time.Millisecond
 
 	views := make([]traeAccountView, len(accts))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 3) // 上游限流：最多 3 并发
+	sem := make(chan struct{}, 1) // 串行（原为 3 并发，会触发 WAF 444）
 	for i, a := range accts {
 		wg.Add(1)
 		go func(i int, a upstream.TraeAccount) {
@@ -116,10 +132,15 @@ func (p *Panel) traeAccounts(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			// 今日快照命中 → 直接判定已签，不打上游（避开 WAF 444）。
-			if earned, ok := snapEarned[a.UserID]; ok {
+			// 余额取真实缓存值（不是签到所得）。
+			if _, ok := snapEarned[a.UserID]; ok {
 				v.CheckedIn = true
-				v.Credits = earned
-				v.Message = "已签到（本地快照）"
+				if bal, has := realBalance[a.UserID]; has {
+					v.Credits = bal
+					v.Message = "已签到"
+				} else {
+					v.Message = "已签到（余额缓存缺失）"
+				}
 				views[i] = v
 				return
 			}
@@ -130,6 +151,7 @@ func (p *Panel) traeAccounts(w http.ResponseWriter, r *http.Request) {
 				v.CheckedIn, v.Credits, v.Message = checkedIn, credits, msg
 			}
 			views[i] = v
+			time.Sleep(traeQueryGap) // 账号间节流，避开 WAF
 		}(i, a)
 	}
 	wg.Wait()
@@ -367,7 +389,7 @@ func (p *Panel) traeCredits(w http.ResponseWriter, r *http.Request) {
 
 	views := make([]traeCreditsView, len(accts))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 3) // 上游限流：最多 3 并发（与 traeAccounts 同口径）
+	sem := make(chan struct{}, 1) // 串行（原 3 并发会触发 Trae WAF 444）
 	for i, a := range accts {
 		wg.Add(1)
 		go func(i int, a upstream.TraeAccount) {
@@ -466,6 +488,21 @@ func (p *Panel) traeCredits(w http.ResponseWriter, r *http.Request) {
 	if local != nil {
 		updatedAt = local.UpdatedAt
 	}
+
+	// 把本轮查到的真实余额写进本地缓存：accounts 页之后直接读它，
+	// 不必再逐账号打上游（那是 444 的根源）。
+	liveBalances := map[string]float64{}
+	for _, v := range views {
+		if v.HasBalance && v.UserID != "" {
+			liveBalances[v.UserID] = v.Balance
+		}
+	}
+	if len(liveBalances) > 0 {
+		if err := upstream.SaveTraeCreditsLocal(p.cfg.TraeDataDir, liveBalances); err != nil {
+			log.Printf("panel: 余额缓存落盘失败: %v", err)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "accounts": views, "trend": trend, "local_updated_at": updatedAt,
 	})
