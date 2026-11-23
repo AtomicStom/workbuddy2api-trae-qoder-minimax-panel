@@ -483,6 +483,9 @@ func Run() {
 	// Trae 令牌自动续期：JWT 只有 8 小时，靠它定期换新，实现「长期免登录」。
 	pn.StartTraeAutoRefresh(ctx)
 
+	// Trae 余额周期刷新（默认 10 分钟）：总览页读缓存，不现查上游（避开 WAF 444）。
+	pn.StartTraeBalanceRefresh(ctx, cfg.Schedule.TraeBalanceRefreshMinutes)
+
 	// IDE 号池（Qoder / WorkBuddy / MiniMax / 豆包）每日自动签到。
 	// 此前这三个平台只有面板「一键签到」的手动入口，没有任何自动排程 ——
 	// 「每天一签到」对它们并不成立，只能靠人记得打开面板。
