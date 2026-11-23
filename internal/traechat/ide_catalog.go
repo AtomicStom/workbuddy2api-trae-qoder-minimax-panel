@@ -148,6 +148,11 @@ func (c *Client) IDEModels(acct *Account) ([]ModelInfo, error) {
 					MaxMode         any    `json:"max_mode"`
 				} `json:"display_config"`
 				DisplayContactConfig string `json:"display_contact_config"`
+				// IsInvisibleToUser 上游的「不展示给用户」标志。
+				// 对应 OFM 渠道包里的 isHidden —— 那是它的模型筛选依据：
+				// 只过滤展示，不代表模型不可调用（glm-5 / DeepSeek-V4-Flash 这类
+				// 能跑但被标记隐藏，是为了不在 IDE 的选模列表里出现）。
+				IsInvisibleToUser bool `json:"is_invisible_to_user"`
 			} `json:"config_info_list"`
 		} `json:"function_configs"`
 	}
@@ -174,6 +179,11 @@ func (c *Client) IDEModels(acct *Account) ([]ModelInfo, error) {
 		for _, it := range g.ConfigInfoList {
 			name := strings.TrimSpace(it.ConfigName)
 			if name == "" || seen[name] || !validModelName(name) {
+				continue
+			}
+			// 与 OFM 一致：按上游的 is_invisible_to_user 裁剪展示面，
+			// 不做硬编码黑名单——上游新增/移除子智能体模型时自动跟随。
+			if it.IsInvisibleToUser {
 				continue
 			}
 			seen[name] = true
