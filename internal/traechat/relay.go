@@ -545,6 +545,37 @@ func (r *Relay) run(ctx context.Context, req ChatRequest, em Emitter) (*converte
 		}
 	}
 
+	if strings.TrimSpace(req.Model) == "" && len(req.Messages) == 0 {
+		return nil, fmt.Errorf("messages 为空")
+	}
+
+	// ── 优先走 IDE agent 协议 ────────────────────────────────────────────
+	//
+	// 账号里存了 machine_id 就说明它来自 IDE 客户端：这类号用 IDE 协议
+	// （/api/agent/v3/llm_utils_chat）只要 1.3 秒出首字，而 SOLO 协议要
+	// 12–19 秒（每次带 2.2 万 token 的 agent 系统提示词）。
+	// 没有 machine_id 的老账号继续走 SOLO，保持向后兼容。
+	bareModel := strings.TrimPrefix(strings.TrimSpace(req.Model), "trae:")
+	if bareModel == "" {
+		bareModel = mi.Name
+	}
+	acctIDE, aerr := r.Pool.Acquire(ctx)
+	if aerr != nil {
+		return nil, aerr
+	}
+	if strings.TrimSpace(acctIDE.MachineID) != "" {
+		conv, err := r.runIDE(ctx, req, em, acctIDE, bareModel)
+		r.Pool.Release(acctIDE)
+		if err == nil {
+			r.Pool.MarkSuccess(acctIDE)
+			return conv, nil
+		}
+		r.Pool.MarkFailure(acctIDE, err)
+		// IDE 失败时不再回落到 SOLO：同一个号走两套协议容易被风控。
+		return nil, err
+	}
+	r.Pool.Release(acctIDE)
+
 	query := FlattenQuery(req.Messages)
 	if strings.TrimSpace(query) == "" {
 		return nil, fmt.Errorf("messages 为空")
