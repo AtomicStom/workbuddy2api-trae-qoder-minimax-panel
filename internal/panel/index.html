@@ -963,6 +963,131 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   /* 卡片兜底横滑，避免内容被裁掉 */
   .box { overflow-x: auto !important; }
 }
+/* ===== DSH-OVERVIEW: 统一总览页样式 =====
+   目标：一屏看全关键信息（账号/签到/积分/模型），手机优先。
+   复用面板已有 CSS 变量，不引入新主题。 */
+
+/* 顶部 KPI 四卡 */
+.ov-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ov-kpi {
+  position: relative;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.ov-kpi .lbl {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--ink-3); margin-bottom: 7px;
+}
+.ov-kpi .lbl svg { width: 14px; height: 14px; opacity: .7; flex: none; }
+.ov-kpi .num {
+  font: 600 25px/1.1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+  white-space: nowrap;
+}
+.ov-kpi .num small { font-size: 12px; font-weight: 500; color: var(--ink-3); margin-left: 3px; }
+.ov-kpi .sub { margin-top: 5px; font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
+.ov-kpi.ok .num { color: var(--ok, #1a9e5c); }
+.ov-kpi.warn .num { color: #d98324; }
+/* 进度条 */
+.ov-bar { margin-top: 8px; height: 5px; border-radius: 3px; background: var(--line-soft); overflow: hidden; }
+.ov-bar > i { display: block; height: 100%; border-radius: 3px; background: var(--ok, #1a9e5c); transition: width .4s; }
+
+/* 平台授权卡组 */
+.ov-plats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ov-plat {
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.ov-plat h4 { margin: 0 0 3px; font-size: 14px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ov-plat .cnt { font: 600 13px var(--mono); color: var(--accent); }
+.ov-plat .desc { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; }
+.ov-plat .way { margin-top: 7px; font-size: 11px; color: var(--ink-3); display: flex; align-items: center; gap: 5px; }
+.ov-plat .way::before { content: "✓"; color: var(--ok, #1a9e5c); font-weight: 700; }
+
+/* 账号列表工具栏 */
+.ov-tools {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.ov-tools .ttl { font-size: 14px; font-weight: 600; margin-right: auto; }
+.ov-tools .ttl span { font-weight: 400; color: var(--ink-3); font-size: 12px; margin-left: 5px; }
+.ov-chip {
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; color: var(--ink-2); font-size: 12px; cursor: pointer;
+  white-space: nowrap;
+}
+.ov-chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 550; }
+
+/* 账号卡网格 */
+.ov-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+.ov-acct {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.ov-acct .hd { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.ov-acct .nm { font-size: 13.5px; font-weight: 600; line-height: 1.3; }
+.ov-acct .uid { font: 11px/1.3 var(--mono); color: var(--ink-3); word-break: break-all; margin-top: 2px; }
+.ov-badge {
+  flex: none; padding: 2px 7px; border-radius: 6px; font-size: 10.5px; font-weight: 600;
+  white-space: nowrap;
+}
+.ov-badge.done { background: rgba(26,158,92,.14); color: #1a9e5c; }
+.ov-badge.todo { background: rgba(217,131,36,.15); color: #c4761a; }
+.ov-badge.off  { background: var(--line-soft); color: var(--ink-3); }
+.ov-badge.tr   { background: var(--accent-soft); color: var(--accent); }
+
+.ov-acct .rows { display: flex; flex-direction: column; gap: 4px; }
+.ov-acct .r { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.ov-acct .r .k { color: var(--ink-3); flex: none; }
+.ov-acct .r .v { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+
+.ov-acct .acts { display: flex; gap: 6px; margin-top: 2px; }
+.ov-acct .acts button {
+  flex: 1; padding: 6px 0; border-radius: 8px; border: 1px solid var(--line);
+  background: transparent; color: var(--ink-2); font-size: 12px; cursor: pointer;
+  min-height: 32px;
+}
+.ov-acct .acts button.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 550; }
+.ov-acct .acts button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 空态 */
+.ov-empty { padding: 32px 16px; text-align: center; color: var(--ink-3); font-size: 13px; }
+
+/* 响应式 */
+@media (max-width: 980px) {
+  .ov-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ov-plats { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .ov-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ov-kpi { padding: 11px 12px; }
+  .ov-kpi .num { font-size: 21px; }
+  .ov-list { grid-template-columns: 1fr; }
+  .ov-tools .ttl { width: 100%; margin-bottom: 4px; }
+}
 </style>
 </head>
 <body>
@@ -973,7 +1098,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div class="sub" id="navSub">控制台</div>
     </div>
     <ul>
-      <li><a href="#checkin" data-view="checkin" class="on">
+      <li><a href="#overview" data-view="overview">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="5" height="5" rx="1.2"/><rect x="8.8" y="2.2" width="5" height="5" rx="1.2"/><rect x="2.2" y="8.8" width="5" height="5" rx="1.2"/><rect x="8.8" y="8.8" width="5" height="5" rx="1.2"/></svg>
+        总览</a></li>
+      <li><a href="#checkin" data-view="checkin">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="3" width="11.6" height="10" rx="1.8"/><path d="M2.2 6.2h11.6M5 1.8v2.4M11 1.8v2.4"/><path d="m6.2 9 1.4 1.4L10 8"/></svg>
         签到池</a></li>
       <li><a href="#usage" data-view="usage">
@@ -1068,7 +1196,19 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
          只是不再有独立页面 —— 签到池的「一键签到」覆盖主号池，账号明细走用量/积分页。 -->
 
     <!-- 签到池 -->
-    <section class="view" id="view-checkin" hidden>
+    <section class="view" id="view-overview" data-view="overview">
+  <div class="topbar">
+    <h2>总览</h2>
+    <span class="sep">/</span>
+    <span class="meta" id="ovMeta">聚合网关</span>
+    <span class="grow"></span>
+    <button class="icon ghost" onclick="window.__dshOverview && window.__dshOverview.load()" title="刷新">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
+    </button>
+  </div>
+</section>
+
+<section class="view" id="view-checkin" hidden>
       <div class="box">
         <header>
           <h3>一键签到</h3>
@@ -2074,5 +2214,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 <div id="toasts"></div>
 
 <script src="app.js"></script>
+<script src="overview.js"></script>
 </body>
 </html>
