@@ -35,6 +35,11 @@ type acctState struct {
 	cooldownUntil time.Time
 	lastErr       string
 	failures      int
+	// lastUsed 最近一次成功请求的时刻。面板据此做「只刷新刚用过的账号余额」，
+	// 避免每次都串行查全部 24 个（那样既慢又容易触发 Trae WAF）。
+	lastUsed time.Time
+	// lastUsedMu 保护 lastUsed 的读写（MarkSuccess 在多个 goroutine 里调用）。
+	lastUsedMu sync.Mutex
 }
 
 // Pool Trae 账号池：负责选号、并发门控（上游 solo_agent_parallel_limit）与失败退避。
@@ -262,6 +267,44 @@ func (p *Pool) Release(a *Account) {
 	}
 }
 
+// markLastUsed 记录账号最近一次成功请求时刻。
+func (p *Pool) markLastUsed(uid string) {
+	p.mu.Lock()
+	var target *acctState
+	for _, st := range p.state {
+		if st != nil && st.UserID == uid {
+			target = st
+			break
+		}
+	}
+	p.mu.Unlock()
+	if target == nil {
+		return
+	}
+	target.lastUsedMu.Lock()
+	target.lastUsed = time.Now()
+	target.lastUsedMu.Unlock()
+}
+
+// LastUsedAt 返回每个账号最近一次成功请求的时刻（uid → 时间）。
+// 从未使用过的账号不在返回值里。面板用它只刷新「刚用过」的余额。
+func (p *Pool) LastUsedAt() map[string]time.Time {
+	out := map[string]time.Time{}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, st := range p.state {
+		if st == nil || st.UserID == "" {
+			continue
+		}
+		st.lastUsedMu.Lock()
+		if !st.lastUsed.IsZero() {
+			out[st.UserID] = st.lastUsed
+		}
+		st.lastUsedMu.Unlock()
+	}
+	return out
+}
+
 // MarkSuccess 清空该账号的失败计数。
 func (p *Pool) MarkSuccess(a *Account) {
 	if a == nil {
@@ -276,6 +319,8 @@ func (p *Pool) MarkSuccess(a *Account) {
 			return
 		}
 	}
+	// 记录最近使用时刻（面板增量刷新余额用）。
+	p.markLastUsed(a.UserID)
 }
 
 // MarkFailure 记录一次失败并按类型退避。
