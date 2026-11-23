@@ -239,6 +239,34 @@ func (p *Panel) traeCheckin(w http.ResponseWriter, r *http.Request) {
 	}
 	p.traeRecordCredits(earned)
 
+	// 签到会让余额增加（于是 credits 变了），这里顺手把「本次签到成功」的
+	// 账号余额重查一遍并写进 remaining_credits.json，保证两个文件不打架：
+	//   trae_credits.json  = 今天签到领了多少（流水）
+	//   remaining_credits.json = 当前余额（账户）
+	// 只查本次涉及到的账号，不碰其它 20 多个（省时且避开 WAF）。
+	if len(earned) > 0 {
+		bal := map[string]float64{}
+		for _, en := range earned {
+			for _, a := range accts {
+				if a.UserID != en.UserID {
+					continue
+				}
+				if rem, _, _, _, _, uerr := upstream.TraeCreditsUsage(a); uerr == nil {
+					bal[a.UserID] = rem
+				}
+				time.Sleep(250 * time.Millisecond)
+				break
+			}
+		}
+		if len(bal) > 0 {
+			if err := upstream.SaveTraeCreditsLocal(p.cfg.TraeDataDir, bal); err != nil {
+				log.Printf("panel: 签到后余额落盘失败: %v", err)
+			} else {
+				log.Printf("panel: 签到后余额已同步 %d 个账号", len(bal))
+			}
+		}
+	}
+
 	log.Printf("panel: Trae 签到完成：成功 %d / 已签 %d / 失败 %d", totalOK, already, failed)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "total": len(results),
