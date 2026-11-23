@@ -11,28 +11,39 @@
   'use strict';
 
   const API = {
-    overview: '/panel/api/overview',
-    trae: '/panel/api/trae/accounts',
-    wb: '/panel/api/ide/workbuddy/accounts',
-    models: '/panel/api/models',
+    overview: 'overview',
+    trae: 'trae/accounts',
+    wb: 'ide/workbuddy/accounts',
+    models: 'models',
   };
 
-  // 与面板其它页共用同一个 api_key（存 localStorage）
+  // 面板的密钥存在 localStorage['wb2api.key']，且 app.js 里有统一的 api() 封装
+  // （自动带 Bearer、401 时弹密钥框、合并同路径在途请求）。这里直接复用，
+  // 避免自己拼 localStorage 键名出错。
+  const LS_KEY = 'wb2api.key';
+
   function apiKey() {
     try {
-      return localStorage.getItem('token') || localStorage.getItem('api_key') || '';
+      return localStorage.getItem(LS_KEY) || '';
     } catch (_) {
       return '';
     }
   }
 
-  async function get(path) {
-    const r = await fetch(path, {
-      headers: { Authorization: 'Bearer ' + apiKey() },
-      cache: 'no-store',
-    });
-    if (!r.ok) throw new Error(path + ' → HTTP ' + r.status);
-    return r.json();
+  // path 用相对形式（如 'trae/accounts'），与 app.js 的 api() 约定一致。
+  async function get(path, opts) {
+    if (typeof window.api === 'function') {
+      return window.api(path, opts || {});
+    }
+    // 兜底：window.api 不可用（理论上不会，app.js 是普通脚本，函数在全局作用域）
+    const k = apiKey();
+    const h = {};
+    if (k && /^[\x00-\xff]*$/.test(k)) h['Authorization'] = 'Bearer ' + k;
+    const r = await fetch('/panel/api/' + path, { headers: h, cache: 'no-store' });
+    if (r.status === 401) throw new Error('密钥无效或未填写');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    return d;
   }
 
   const fmt = (n, d = 2) => {
@@ -197,16 +208,8 @@
       b1.disabled = true;
       b1.textContent = '…';
       try {
-        const url = isTrae ? '/panel/api/trae/checkin' : '/panel/api/ide/workbuddy/checkin';
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: {
-            Authorization: 'Bearer ' + apiKey(),
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(isTrae ? { user_id: uid } : { uid: uid }),
-        });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const path = isTrae ? 'trae/checkin' : 'ide/workbuddy/checkin';
+        await get(path, { method: 'POST', body: JSON.stringify(isTrae ? { user_id: uid } : { uid: uid }) });
         b1.textContent = '已签到';
         badge.textContent = '已签到';
         badge.className = 'ov-badge done';
@@ -220,16 +223,8 @@
       b2.disabled = true;
       b2.textContent = '…';
       try {
-        const url = isTrae ? '/panel/api/trae/refresh' : '/panel/api/ide/workbuddy/renew';
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: {
-            Authorization: 'Bearer ' + apiKey(),
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(isTrae ? { user_id: uid } : { uid: uid }),
-        });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const path = isTrae ? 'trae/refresh' : 'ide/workbuddy/renew';
+        await get(path, { method: 'POST', body: JSON.stringify(isTrae ? { user_id: uid } : { uid: uid }) });
         b2.textContent = '已续期';
       } catch (e) {
         b2.textContent = '失败';
