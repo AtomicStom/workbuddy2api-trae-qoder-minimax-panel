@@ -115,6 +115,7 @@ type Config struct {
 		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。
 		BalanceRefreshEnabled bool `json:"balance_refresh_enabled"` // 缺省 true；false = 关闭
 		BalanceRefreshMinutes int  `json:"balance_refresh_minutes"` // 缺省 5；<=0 回落 5
+		TraeBalanceRefreshMinutes int `json:"trae_balance_refresh_minutes"` // Trae 余额缓存刷新间隔（分钟，默认 10）
 	} `json:"schedule"`
 
 	Global struct {
@@ -313,6 +314,7 @@ func Default() *Config {
 	c.Schedule.IDECheckinEnabled = true
 	c.Schedule.BalanceRefreshEnabled = true
 	c.Schedule.BalanceRefreshMinutes = 5
+	c.Schedule.TraeBalanceRefreshMinutes = 10
 	c.Upstream.TimeoutSeconds = 120
 	// HeaderTimeoutSeconds/IdleTimeoutSeconds 默认 0（未设置态），回落见 normalize()。
 	c.Upstream.HeaderTimeoutSeconds = 0
@@ -650,6 +652,9 @@ func (c *Config) normalize() error {
 	if c.Schedule.BalanceRefreshEnabled {
 		if c.Schedule.BalanceRefreshMinutes <= 0 {
 			c.Schedule.BalanceRefreshMinutes = 5
+		}
+		if c.Schedule.TraeBalanceRefreshMinutes <= 0 {
+			c.Schedule.TraeBalanceRefreshMinutes = 10
 		}
 		c.BalanceRefreshInterval = time.Duration(c.Schedule.BalanceRefreshMinutes) * time.Minute
 	}
