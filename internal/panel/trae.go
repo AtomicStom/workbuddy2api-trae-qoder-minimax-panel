@@ -69,6 +69,26 @@ func (p *Panel) traeAccounts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "读取 Trae 账号失败: "+err.Error())
 		return
 	}
+	// ── 优先读今日签到快照 ────────────────────────────────────────────
+	//
+	// 为什么：签到的结果当天不会变，而逐个查上游 status 会给 24 个账号
+	// 各打一次请求 —— Trae 的 WAF（volc-dcdn，HTTP 444 X-TT-System-Error: 3）
+	// 会因为这种并发查询把整个 IP 判为异常，导致页面全红。
+	// 所以只要今天已经签过（快照里有记录），就直接用快照回答，不再碰上游。
+	today := time.Now().Format("2006-01-02")
+	snapEarned := map[string]float64{}
+	if f := p.loadTraeCreditsSelf(); f != nil {
+		for _, d := range f.Daily {
+			if d.Date != today {
+				continue
+			}
+			for _, en := range d.Accounts {
+				snapEarned[en.UserID] = en.Earned
+			}
+			break
+		}
+	}
+
 	views := make([]traeAccountView, len(accts))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 3) // 上游限流：最多 3 并发
@@ -94,6 +114,14 @@ func (p *Panel) traeAccounts(w http.ResponseWriter, r *http.Request) {
 					views[i] = v
 					return
 				}
+			}
+			// 今日快照命中 → 直接判定已签，不打上游（避开 WAF 444）。
+			if earned, ok := snapEarned[a.UserID]; ok {
+				v.CheckedIn = true
+				v.Credits = earned
+				v.Message = "已签到（本地快照）"
+				views[i] = v
+				return
 			}
 			checkedIn, credits, msg, err := upstream.TraeStatus(a)
 			if err != nil {
