@@ -294,15 +294,41 @@
     renderList(mountPoint, trae, wb);
   }
 
-  async function load() {
+  // show()：进入页面时调用。已有数据则立刻渲染（避免每次切页都重新拉+白屏），
+  // 同时后台静默刷新；无数据才显示 loading。
+  function show() {
+    const host = document.getElementById('view-overview');
+    if (!host) return;
+    if (!mountPoint || !host.contains(mountPoint)) {
+      host.innerHTML = '';
+      mountPoint = el('div', 'ov-wrap');
+      host.appendChild(mountPoint);
+    }
+    if (state.data) {
+      mountPoint.innerHTML = '';
+      render(host);
+      // 静默刷新，失败不影响已渲染内容
+      load(true).catch(() => {});
+      return;
+    }
+    mountPoint.innerHTML = '';
+    mountPoint.appendChild(el('div', 'ov-empty', '正在加载…'));
+    load(false).catch(() => {});
+  }
+
+  async function load(silent) {
     const host = document.getElementById('view-overview');
     if (!host) return;
 
-    // 清空并建立挂载点
-    host.innerHTML = '';
-    mountPoint = el('div', 'ov-wrap');
-    host.appendChild(mountPoint);
-    mountPoint.appendChild(el('div', 'ov-empty', '正在加载…'));
+    if (!mountPoint || !host.contains(mountPoint)) {
+      host.innerHTML = '';
+      mountPoint = el('div', 'ov-wrap');
+      host.appendChild(mountPoint);
+    }
+    if (!silent) {
+      mountPoint.innerHTML = '';
+      mountPoint.appendChild(el('div', 'ov-empty', '正在加载…'));
+    }
 
     try {
       const [traeRes, wbRes, modelsRes, ovRes] = await Promise.all([
@@ -340,6 +366,7 @@
       mountPoint.innerHTML = '';
       render(host);
     } catch (e) {
+      if (silent && state.data) return;   // 静默刷新失败：保留旧内容
       mountPoint.innerHTML = '';
       mountPoint.appendChild(el('div', 'ov-empty', '加载失败：' + e.message));
     }
@@ -347,7 +374,8 @@
 
   // 暴露给面板路由
   window.__dshOverview = {
-    load,
+    show,
+    load: () => load(false),
     rerender: () => rerender(null),
   };
 })();
