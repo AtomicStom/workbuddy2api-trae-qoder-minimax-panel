@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const (
@@ -33,6 +34,24 @@ const (
 	ideMaxOutputTokens  = 64000
 	ideMaxModeType      = 1
 )
+
+// ideHTTPClient 是全进程共享的 HTTP 客户端。
+//
+// 为什么必须共享：默认 http.DefaultTransport 的 MaxIdleConnsPerHost 只有 2，
+// 24 个账号并发时会频繁新建连接，每次 TLS 握手约 0.9 秒——这正是首字慢的主要来源。
+// 这里把空闲连接数与超时调大，让上游连接长期复用。
+var ideHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          128,
+		MaxIdleConnsPerHost:   64,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true,
+	},
+	// 不设整体超时：流式响应由 ctx 控制
+}
 
 // ideFunctionChain 是 function 回退顺序：不同模型归属不同通道，
 // 报 4001（参数无效 / 通道不认这个模型）就换下一个。
@@ -191,12 +210,17 @@ func ideChatOnce(ctx context.Context, acct *Account, body map[string]any,
 	req.Header = ideHeaders(acct)
 	req.Header.Set("Accept", "text/event-stream")
 
-	client := &http.Client{Timeout: 0} // 流式：不设总超时，由 ctx 控制
+	client := ideHTTPClient // 共享连接池：复用 TCP/TLS，避免每次握手
 	resp, derr := client.Do(req)
 	if derr != nil {
 		return false, usage, false, "", fmt.Errorf("IDE 对话请求失败: %w", derr)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// 必须读干净才能把连接还回池子：提前 return 时残留的 body 会让
+		// 该连接被直接丢弃，下次请求只能重新握手（实测多付约 0.9 秒）。
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		head, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
