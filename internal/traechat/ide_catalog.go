@@ -36,9 +36,17 @@ const (
 )
 
 // ideFunctions 是探测目录时要问的通道列表；上游按通道分组返回。
+//
+// 这 22 个与 OFM 渠道包（business.mjs:44006）逐字一致。只问少数几个通道会
+// 导致模型面严重偏差：实测问 7 个通道得到 99 条原始条目、混合后语义混乱；
+// 问全 22 个通道再按同一套规则过滤，才与 OFM 的模型清单对齐。
+// 顺序即优先级（越靠前越优先），用于同名模型去重时择一。
 var ideFunctions = []string{
-	"chat_v3", "solo_work_lite", "solo_agent", "chat",
-	"multimodal", "builder_v3", "solo_design_lite",
+	"ui_builder_v2", "solo_coder", "chat_v3", "solo_builder", "builder_v3", "builder",
+	"chat", "inline_chat", "git_ai", "custom_agent_generation", "utils", "code_reviewer",
+	"code_review_summary", "solo_agent", "solo_agent_remote", "solo_work_remote",
+	"solo_agent_lite", "solo_work_lite", "solo_design_lite", "solo_design_remote",
+	"multimodal", "system_diagnosis",
 }
 
 // ideHeaders 构造 IDE 客户端的请求头。
@@ -153,6 +161,10 @@ func (c *Client) IDEModels(acct *Account) ([]ModelInfo, error) {
 				// 只过滤展示，不代表模型不可调用（glm-5 / DeepSeek-V4-Flash 这类
 				// 能跑但被标记隐藏，是为了不在 IDE 的选模列表里出现）。
 				IsInvisibleToUser bool `json:"is_invisible_to_user"`
+				// Usage 上游声明的用途：只有 "chat_completion" 才是可直连的对话模型。
+				Usage string `json:"usage"`
+				// ConfigSwitch 为 false 表示该条目已关闭。
+				ConfigSwitch *bool `json:"config_switch"`
 			} `json:"config_info_list"`
 		} `json:"function_configs"`
 	}
@@ -178,12 +190,24 @@ func (c *Client) IDEModels(acct *Account) ([]ModelInfo, error) {
 	for _, g := range groups {
 		for _, it := range g.ConfigInfoList {
 			name := strings.TrimSpace(it.ConfigName)
-			if name == "" || seen[name] || !validModelName(name) {
+			if name == "" {
 				continue
 			}
-			// 与 OFM 一致：按上游的 is_invisible_to_user 裁剪展示面，
-			// 不做硬编码黑名单——上游新增/移除子智能体模型时自动跟随。
+			// ① 只保留对话补全类：embedding / summary / fast_apply /
+			//    title_generation / custom_model 等都不是可直连的对话模型。
+			if it.Usage != "" && it.Usage != "chat_completion" {
+				continue
+			}
+			// ② 上游显式关闭的条目。
+			if it.ConfigSwitch != nil && !*it.ConfigSwitch {
+				continue
+			}
+			// ③ 上游标记「不展示给用户」——内部子智能体、隐藏档位等。
+			//    这是 OFM 的 isHidden，也是唯一会随上游自动变化的筛选依据。
 			if it.IsInvisibleToUser {
+				continue
+			}
+			if seen[name] || !validModelName(name) {
 				continue
 			}
 			seen[name] = true
