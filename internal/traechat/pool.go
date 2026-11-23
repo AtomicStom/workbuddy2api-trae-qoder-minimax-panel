@@ -18,6 +18,12 @@ type Account struct {
 	UserID   string `json:"UserID"`
 	JWT      string `json:"jwt"`
 	DeviceID string `json:"device_id,omitempty"`
+	// MachineID 是 Trae IDE 客户端的设备指纹（X-Machine-Id 头）。
+	// SOLO 协议不需要它，但 IDE agent 协议必须带，否则上游按设备维度拒绝。
+	MachineID string `json:"machine_id,omitempty"`
+	// ClientID 是签发这份 refresh_token 的 OAuth 客户端。
+	// 第三方工具注册的号与官方客户端不是同一个，续期时报错会 400。
+	ClientID string `json:"client_id,omitempty"`
 }
 
 // accountsFileName 与 Trae Work 助手 / 面板签到共用同一份账号文件。
@@ -377,7 +383,9 @@ func (c *CatalogCache) Models(ctx context.Context) ([]ModelInfo, error) {
 		if err != nil {
 			return c.stale()
 		}
-		agent, work, err := c.pool.Client().Models(acct.JWT)
+		// 目录来源改用 IDE 接口：完整 37 个模型 + 倍率，
+		// SOLO 目录只有 20 个且缺 rate 过滤依据。
+		merged, err := c.pool.Client().IDEModels(acct)
 		c.pool.Release(acct)
 		if err != nil {
 			c.pool.MarkFailure(acct, err)
@@ -385,7 +393,7 @@ func (c *CatalogCache) Models(ctx context.Context) ([]ModelInfo, error) {
 			continue
 		}
 		c.pool.MarkSuccess(acct)
-		if merged := c.build(agent, work); len(merged) > 0 {
+		if len(merged) > 0 {
 			c.mu.Lock()
 			c.models = merged
 			c.fetched = time.Now()
