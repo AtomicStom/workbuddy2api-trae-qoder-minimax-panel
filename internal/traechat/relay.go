@@ -578,37 +578,8 @@ func (r *Relay) run(ctx context.Context, req ChatRequest, em Emitter) (*converte
 	}
 	r.Pool.MarkSuccess(acctIDE)
 	return conv, nil
-
-	query := FlattenQuery(req.Messages)
-	if strings.TrimSpace(query) == "" {
-		return nil, fmt.Errorf("messages 为空")
-	}
-
-	var lastErr error
-	for attempt := 0; attempt <= r.maxRetry(); attempt++ {
-		acct, err := r.Pool.Acquire(ctx)
-		if err != nil {
-			return nil, err
-		}
-		conv, err := r.attempt(ctx, acct, mi, query, req, em)
-		r.Pool.Release(acct)
-		if err == nil {
-			r.Pool.MarkSuccess(acct)
-			return conv, nil
-		}
-		lastErr = err
-		r.Pool.MarkFailure(acct, err)
-		// 仅「并行超限 / 凭证失效」值得换号重试；其他错误（含上游语义错误）直接抛出。
-		if !IsParallelLimit(err) && !IsUnauthorized(err) {
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(300 * time.Millisecond):
-		}
-	}
-	return nil, lastErr
+	// SOLO（/api/remote/v1）路径已移除：账号必须带 machine_id 走 IDE 协议，
+	// 缺 machine_id 直接报错，不做静默回落。
 }
 
 func (r *Relay) attempt(ctx context.Context, acct *Account, mi ModelInfo, query string, req ChatRequest, em Emitter) (*converter, error) {
