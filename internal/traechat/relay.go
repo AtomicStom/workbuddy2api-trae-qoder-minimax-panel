@@ -563,18 +563,21 @@ func (r *Relay) run(ctx context.Context, req ChatRequest, em Emitter) (*converte
 	if aerr != nil {
 		return nil, aerr
 	}
-	if strings.TrimSpace(acctIDE.MachineID) != "" {
-		conv, err := r.runIDE(ctx, req, em, acctIDE, bareModel)
+	// 缺 machine_id 说明这个号不是 IDE 客户端签发的（或导入时漏了字段）。
+	// 直接报错，不回落 SOLO：回落会让同一个号静默走慢 10 倍的协议，
+	// 表面只是「今天有点慢」，实际把问题藏起来了。显式失败才能被发现。
+	if strings.TrimSpace(acctIDE.MachineID) == "" {
 		r.Pool.Release(acctIDE)
-		if err == nil {
-			r.Pool.MarkSuccess(acctIDE)
-			return conv, nil
-		}
+		return nil, fmt.Errorf("账号 %s 缺少 machine_id：请用面板「添加账号」重新登录一次（IDE 协议需要设备指纹）", acctIDE.Name)
+	}
+	conv, err := r.runIDE(ctx, req, em, acctIDE, bareModel)
+	r.Pool.Release(acctIDE)
+	if err != nil {
 		r.Pool.MarkFailure(acctIDE, err)
-		// IDE 失败时不再回落到 SOLO：同一个号走两套协议容易被风控。
 		return nil, err
 	}
-	r.Pool.Release(acctIDE)
+	r.Pool.MarkSuccess(acctIDE)
+	return conv, nil
 
 	query := FlattenQuery(req.Messages)
 	if strings.TrimSpace(query) == "" {
