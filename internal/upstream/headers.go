@@ -16,10 +16,10 @@ const (
 	// defaultClientVersion 出站 WorkBuddy 客户端版本段（UA 的 `WorkBuddy/<ver>` 与
 	// 白名单头组的 X-IDE-Version）。对齐官方 WorkBuddy Desktop 分发包版本（5.5.4）。
 	// config upstream.client_version 可覆盖（空 = 内置默认）。
-	defaultClientVersion = "5.5.4"
+	defaultClientVersion = "5.11.3"
 	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。对齐官方内置 CLI（2.137.1）。
 	// config upstream.cli_version 可覆盖（空 = 内置默认）。
-	defaultCliVersion = "2.137.1"
+	defaultCliVersion = "2.165.0"
 
 	originRefererCN     = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
@@ -338,6 +338,12 @@ func (c *Client) injectAttribution(req *http.Request) {
 	req.Header.Set("X-IDE-Type", name)
 	req.Header.Set("X-IDE-Version", c.clientVersion())
 	req.Header.Set("X-Product", name)
+	// X-Client-Platform / X-Client-Version：旧版 wb2api 会发，用于让上游识别
+	// 「请求来自哪种客户端」。缺这两个头时上游按默认值（桌面端）推断运行环境，
+	// 导致模型自述 Linux/Deepin + /home/user，且可能影响它对客户端 system prompt
+	// 的处理。取值对齐旧版二进制的 workbuddy-desktop。
+	req.Header.Set("X-Client-Platform", "workbuddy-desktop")
+	req.Header.Set("X-Client-Version", c.clientVersion())
 }
 
 // injectClientIP 在 PassthroughIP 开启时把 clientIP 参数透传给上游（三等价头）。
