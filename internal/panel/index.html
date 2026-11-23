@@ -683,6 +683,44 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .freeze-bar .go { margin-left: auto; color: var(--accent); font-weight: 600; white-space: nowrap; }
 
 
+
+/* ===== DSH-BOTTOMNAV: 窄屏把侧栏导航改成底部标签栏 =====
+   原面板窄屏只是把 .nav 变成顶部横向条，仍占掉首屏且离拇指远。
+   这里固定在底部，并给页面留出等高铁，避免遮住最后一屏内容。 */
+@media (max-width: 760px) {
+  .nav {
+    position: fixed !important;
+    left: 0; right: 0; bottom: 0; top: auto !important;
+    z-index: 70;
+    height: auto !important;
+    flex-direction: column !important;
+    border-top: 1px solid var(--line);
+    border-right: none !important;
+    background: var(--bg) !important;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .nav ul {
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 8px !important;
+    gap: 4px;
+    scrollbar-width: none;
+  }
+  .nav ul::-webkit-scrollbar { display: none; }
+  .nav ul li { flex: none; }
+  .nav a {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 7px 10px !important; border-radius: 10px;
+    font-size: 11.5px !important; line-height: 1.2; white-space: nowrap;
+  }
+  .nav a svg { width: 18px !important; height: 18px !important; }
+  .nav .sig { display: none !important; }
+  body { padding-bottom: 78px !important; }
+  .wrap, main { padding-bottom: 78px !important; }
+  /* 底部标签栏下的按钮不再需要额外留白 */
+  .shell { padding-bottom: 0 !important; }
+}
 /* ===== DSH-MOBILE-PATCH: 移动端适配（窄屏优先） =====
    面板原有断点只处理了栅格列数，没处理「表格挤压 / 字号过小 / 触控太小」。
    这里按 760px 与 420px 两档补齐，只做覆盖、不改原有规则。 */
