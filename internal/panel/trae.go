@@ -308,18 +308,43 @@ func (p *Panel) StartTraeBalanceRefresh(ctx context.Context, minutes int) {
 	}()
 }
 
-// traeRefreshBalancesOnce 串行查一遍全部 Trae 账号的真实余额，合并写进
-// data/remaining_credits.json。单个账号失败不影响其它账号。
+// traeRefreshBalancesOnce 增量刷新 Trae 余额：只查「最近用过的」账号，
+// 其余保留缓存值。
+//
+// 为什么增量：24 个账号全查要 6 秒，且串行仍然容易踩 Trae WAF。
+// 而余额只会被「刚调用过的那个账号」改变 —— 所以只刷活跃账号，
+// 其余账号的余额原样留在缓存里，合计仍然是准确的。
+//
+// 活跃判定：lastUsed 在 recentWindow 内（默认 30 分钟）。
+// 若没有任何账号在窗口内活跃，则退化为「全刷」一次，保证缓存不会长期不更新。
 func (p *Panel) traeRefreshBalancesOnce() {
 	accts, err := p.traeLoadAccounts()
 	if err != nil || len(accts) == 0 {
 		return
 	}
+
+	const recentWindow = 30 * time.Minute
+	var lastUsed map[string]time.Time
+	if p.traeChat != nil {
+		lastUsed = p.traeChat.LastUsedAt()
+	}
+	now := time.Now()
+	active := map[string]bool{}
+	for uid, t := range lastUsed {
+		if now.Sub(t) <= recentWindow {
+			active[uid] = true
+		}
+	}
+	full := len(active) == 0 // 没有活跃账号 → 全刷一次兜底
+
 	got := map[string]float64{}
-	okN, failN := 0, 0
+	okN, failN, skipN := 0, 0, 0
 	for _, a := range accts {
-		// 凭证本地已过期就跳过，省一次必然失败的请求。
-		if exp, ok := upstream.TraeJWTExpiry(a.JWT); ok && time.Now().After(exp) {
+		if !full && !active[a.UserID] {
+			skipN++ // 不活跃：保留缓存值，不查上游
+			continue
+		}
+		if exp, ok := upstream.TraeJWTExpiry(a.JWT); ok && now.After(exp) {
 			failN++
 			continue
 		}
@@ -338,8 +363,9 @@ func (p *Panel) traeRefreshBalancesOnce() {
 			log.Printf("panel: Trae 余额缓存落盘失败: %v", err)
 		}
 	}
-	if failN > 0 {
-		log.Printf("panel: Trae 余额刷新 成功 %d / 失败 %d", okN, failN)
+	if failN > 0 || full {
+		log.Printf("panel: Trae 余额刷新(%s) 成功 %d / 失败 %d / 跳过 %d",
+			map[bool]string{true: "全量", false: "增量"}[full], okN, failN, skipN)
 	}
 }
 
