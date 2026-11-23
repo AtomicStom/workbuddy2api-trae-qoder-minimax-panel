@@ -773,6 +773,28 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .tbl-wrap { overflow-x: visible !important; }
 }
 
+
+/* ===== DSH-GLOBALFLEX: 根治窄屏「文字被压成竖排」 =====
+   根因：面板大量 .row/.box 用 display:flex + flex-wrap:nowrap，窄屏下
+   子元素被压到十几像素宽，中文就一个字符一行（实测标题曾低到 13px 宽）。
+   这里在窄屏统一允许换行；需要横滑的容器单独还原 nowrap。 */
+@media (max-width: 760px) {
+  * { flex-wrap: wrap !important; }
+  .nav ul, .tabbar, .chips, .scroll-x { flex-wrap: nowrap !important; }
+
+  /* 换行后子项仍要能收缩，避免溢出 */
+  .topbar > *, .row > *, .box > *, .hdr > *, .line > * { min-width: 0; }
+
+  /* 长路径 / token / 时间串可断行，不再撑破卡片 */
+  code, pre, .mono, .path, .id, .nm {
+    overflow-wrap: anywhere !important;
+    word-break: break-all !important;
+  }
+  img, svg, pre, table { max-width: 100% !important; }
+  body { overflow-x: hidden; }
+  /* 卡片内允许纵向伸展，避免被固定高度截断 */
+  .box, .card { height: auto !important; overflow-x: visible !important; }
+}
 /* ===== DSH-TOPBARFIX: 窄屏页头（实测 .topbar nowrap 把标题挤到 15px 导致竖排） ===== */
 @media (max-width: 760px) {
   .topbar {
