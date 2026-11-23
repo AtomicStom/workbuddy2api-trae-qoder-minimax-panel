@@ -430,13 +430,14 @@ let lastPackagesAt = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { checkin: '签到池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', ideaccounts: 'IDE 账号池', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { overview: '总览', checkin: '签到池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', ideaccounts: 'IDE 账号池', models: '模型与档位', config: '配置', logs: '运行日志' };
 function go(v) {
   if (!(v in TITLES)) v = 'checkin';
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
   $('ttl').textContent = TITLES[v];
+  if (v === 'overview') { if (window.__dshOverview && !window.__ovLoaded) { window.__ovLoaded = 1; window.__dshOverview.load(); } }
   if (v === 'models') { if (!$('mdBody').children.length) loadModels(); loadModelQueue(); }
   if (v === 'config') loadConfig();
   if (v === 'logs') loadLogs();
@@ -459,7 +460,7 @@ setTimeout(() => {
   // 优先还原上次停留的视图与滚动位置（切号后按 F5、或从别的页切回来都不回顶部）；
   // 没有历史记录时再按 URL hash 进入。
   if (!restoreViewState()) {
-    const hash = (location.hash || '#checkin').slice(1);
+    const hash = (location.hash || '#overview').slice(1);
     go(hash in TITLES ? hash : 'checkin');
   }
 }, 0);
