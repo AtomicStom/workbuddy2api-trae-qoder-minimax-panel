@@ -378,4 +378,22 @@
     load: () => load(false),
     rerender: () => rerender(null),
   };
+
+  // 自启动：app.js 的 setTimeout(0) 可能在 overview.js 之前跑完，
+  // 那时 window.__dshOverview 还不存在，go('overview') 就跳过了渲染，
+  // 表现是「刷新后空白，切到别的页再切回来才出现」。
+  // 这里在脚本就绪后补一次：若当前 hash 或可见视图是 overview，立即渲染。
+  function autostart() {
+    const hash = (location.hash || '').slice(1);
+    const host = document.getElementById('view-overview');
+    const visible = host && !host.hidden;
+    if (hash === 'overview' || visible) {
+      show();
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', autostart, { once: true });
+  } else {
+    autostart();
+  }
 })();
