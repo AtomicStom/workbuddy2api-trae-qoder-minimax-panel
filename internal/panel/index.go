@@ -19,6 +19,9 @@ var indexHTML []byte
 //go:embed app.js
 var appJS []byte
 
+//go:embed overview.js
+var overviewJS []byte
+
 // csp 内容安全策略（严格版，无需 unsafe-inline）：
 //   - default-src 'none'        默认全禁，逐个开口
 //   - script-src 'self'         只跑同源脚本（app.js）；页面无内联事件处理器/内联脚本
@@ -63,4 +66,13 @@ func (p *Panel) appScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(appJS)
+}
+
+// overviewScript 提供总览页逻辑（独立文件，保持 app.js 单一职责）。
+func (p *Panel) overviewScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(overviewJS)
 }
