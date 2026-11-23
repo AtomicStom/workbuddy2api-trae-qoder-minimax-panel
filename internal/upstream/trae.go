@@ -895,6 +895,52 @@ func readTraeJSONFile(dataDir, name string, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
+// SaveTraeCreditsLocal 把本轮查到的真实余额落盘到 data/remaining_credits.json。
+//
+// 为什么需要：trae/accounts 页每次刷新都要显示余额，但逐个查上游会被
+// Trae 的 WAF（HTTP 444）拦成整页报错。所以由 trae/credits（用户主动点
+// 「刷新余额」时才跑）把真实值写下来，accounts 页直接读缓存。
+// 只合并传入的账号，不覆盖其它账号已有值。
+func SaveTraeCreditsLocal(dataDir string, credits map[string]float64) error {
+	dir, err := traeDataDir(dataDir)
+	if err != nil {
+		return err
+	}
+	if len(credits) == 0 {
+		return nil
+	}
+	fp := filepath.Join(dir, filepath.FromSlash("data/remaining_credits.json"))
+	if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
+		return err
+	}
+	var cur TraeCreditsLocal
+	if raw, rerr := os.ReadFile(fp); rerr == nil {
+		_ = json.Unmarshal(raw, &cur)
+	}
+	if cur.Credits == nil {
+		cur.Credits = map[string]float64{}
+	}
+	if cur.ExpireTimes == nil {
+		cur.ExpireTimes = map[string]int64{}
+	}
+	for uid, bal := range credits {
+		if uid == "" {
+			continue
+		}
+		cur.Credits[uid] = bal
+	}
+	cur.UpdatedAt = time.Now().Format(time.RFC3339)
+	raw, err := json.MarshalIndent(cur, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := fp + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, fp)
+}
+
 // LoadTraeCreditsLocal 读本地积分快照；文件不存在返回 nil（调用方按「无数据」处理）。
 func LoadTraeCreditsLocal(dataDir string) *TraeCreditsLocal {
 	var out TraeCreditsLocal
